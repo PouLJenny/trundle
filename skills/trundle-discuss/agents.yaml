@@ -1,0 +1,111 @@
+# trundle-discuss —— agent 适配库
+#
+# 声明「某个 CLI 怎么调」。用户选了哪些、各自站位是什么,在名册里
+# (~/.claude/trundle-discuss/roster.yaml),不在这个文件——本文件会随 skill 更新被覆盖。
+#
+# 新增一个 agent 要填满七个字段,见 references/adapting-new-cli.md。
+# 字段集合来自实测,比"六字段就能覆盖"的初始设想多出第 7 项 trust:
+# 两家主流 CLI 都有信任目录门禁,且绕过门禁有真实代价,不是可选项。
+
+defaults:
+  timeout: 120          # 秒。实测正常延迟 6-14s,120s 足够覆盖长回答
+  parallel: true        # 多 agent 用 & + wait,总耗时取 max 而非 sum
+
+# ─────────────────────────────────────────────────────────────
+# 所有 agent 通用的调用纪律(踩过的坑,勿删)
+# ─────────────────────────────────────────────────────────────
+invocation_rules:
+  # 并行调用时 stdin 变成不可读管道,codex 会检测到 "stdin is piped"
+  # 然后尝试读取并失败(os error 11)。所有调用必须显式重定向。
+  stdin: /dev/null
+
+  # 子进程无状态,每次调用都要完整传入上下文(见 references/prompt-kit.md)
+  stateless: true
+
+  # 不要硬编码模型名。实测 gemini-2.5-flash 已对新用户下线,
+  # 硬编码等于给自己埋一颗定时炸弹。留空走各 CLI 的默认路由。
+  pin_model: false
+
+agents:
+
+  codex:
+    verified: true                    # 实测通过 B1-B3(2026-08)
+    cmd: codex exec {flags} {prompt}
+    noninteractive_flags: []          # codex exec 本身即非交互模式
+    # 只读沙箱。注意 --full-auto 是废弃兼容 flag,不要用
+    readonly_flags: ["--sandbox", "read-only"]
+    extract: stdout                   # 最终消息走 stdout,progress 走 stderr
+    timeout: 120
+    auth_env: []                      # 复用 ~/.codex 已有登录态
+    trust:
+      # codex 要求 cwd 在 git repo 内,否则拒绝启动。
+      # 非 repo 目录用该 flag 放行,无副作用(与 gemini 不同)。
+      check: git_repo
+      bypass_flags: ["--skip-git-repo-check"]
+      bypass_safe: true
+    latency_observed: "7-13s"
+    stance: |
+      你只盯实现代价和边界情况。具体地问:这个方案要写多少代码、会引入什么状态、
+      什么输入会让它崩。不评价方案好不好听。
+
+  gemini:
+    verified: true
+    cmd: gemini {flags} -p {prompt}
+    noninteractive_flags: []          # -p 在非 TTY 下即 headless,直接输出纯正文
+    readonly_flags: ["--approval-mode", "plan"]   # plan 模式可读可搜,不可写不可执行
+    # 不用 --output-format json:那样正文埋在 .response 里,得靠 jq 抠出来,
+    # 为了省掉一个 macOS 上要额外装的依赖,直接吃纯文本输出。
+    extract: stdout
+    timeout: 120
+    auth_env: []                      # ~/.gemini/settings.json 已配认证
+    trust:
+      # ★ 这里是整个适配库最重要的一条,不要图省事 ★
+      #
+      # 实测:在未 trust 的目录下用环境变量绕过信任检查,模型路由会降级到
+      # 一个不稳定的 preview 分支——8 次请求失败 7 次,墙钟从 14s 恶化到 108-199s。
+      # 在已 trust 的目录里则路由到稳定分支,1 请求 0 失败,6.4s。
+      #
+      # 所以:绝不 bypass,而是前置检查 + 引导用户 trust。
+      # (那个绕过用的环境变量名故意不写在这里,免得被顺手复制进代码。)
+      check: gemini_trusted_folder
+      config: ~/.gemini/trustedFolders.json
+      bypass_safe: false              # ← 10x 延迟惩罚,不许自动降级
+      remedy: |
+        在该目录下交互式跑一次 gemini 并选择 trust,
+        或在 ~/.gemini/trustedFolders.json 里加入 "<dir>": "TRUST_FOLDER"
+    latency_observed: "6-14s"
+    stance: |
+      你只盯有没有更简单的做法、是不是解错了问题。
+      如果讨论的前提本身可疑,直接说前提有问题,不要在给定框架内找优化。
+
+  claude:
+    verified: true
+    # 注意:这是作为「参与者」的 claude CLI 子进程,
+    # 与运行本 skill 的主持人 Claude 不是一回事,不能被 @ 混淆。
+    cmd: claude {flags} -p {prompt}
+    noninteractive_flags: []
+    readonly_flags: ["--allowedTools", "Read,Glob,Grep"]   # 白名单里没有写工具
+    extract: stdout
+    timeout: 180
+    # 必须清掉这个变量,否则子进程认为自己在嵌套 session 里而报错
+    env_unset: ["CLAUDECODE"]
+    auth_env: []
+    trust:
+      check: none
+    stance: |
+      你只盯这个方案三个月后会变成什么样:谁来维护、加需求时从哪里裂开、
+      有没有把临时决定固化成永久结构。
+
+# ─────────────────────────────────────────────────────────────
+# 还没适配的
+#
+# 只收实测跑通的条目。没验证过的写进来是负债——用户选中它、它不工作,
+# 比"压根没这个选项"更糟。
+#
+# 以下 CLI 本机可见但尚未适配,discover.sh 会把它们列为「发现但未登记」并提示:
+#   opencode   `opencode run <msg>`,只读模式待确认
+#   cline      `cline -p --json <msg>`,实测 90s 无响应(疑似需先配置账号)
+#   kiro-cli   `kiro-cli chat`,非交互与只读 flag 都待确认
+#
+# 想加进来:按 references/adapting-new-cli.md 跑完验证再提 PR。
+# 只读 flag 必须实测,不能猜。
