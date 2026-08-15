@@ -63,12 +63,13 @@ cd trundle
 ./skills/trundle-discuss/scripts/verify.sh     # 自检依赖
 ```
 
-**前置依赖**(只有两条)
+**前置依赖**(只有三条)
 
 - **Claude Code** —— 这是 host,必需。本 skill 只在 Claude Code 里运行,不支持其他 agent 环境
 - **至少一个**参与者 CLI:`codex` / `gemini` / `claude`
+- **python3 >= 3.8** —— 只用标准库,不需要 pip 装任何东西。Linux 一般自带;macOS 12.3+ 不预装,`xcode-select --install` 即可
 
-不需要装 `jq`、也不需要 GNU coreutils —— 脚本只用 bash 和 POSIX 标准命令,macOS 和 Linux 开箱即用。
+不需要装 `jq` —— `json` 在 Python 标准库里,再装一个 jq 是白付依赖。
 
 > ### ⚠️ gemini 用户必读
 >
@@ -175,7 +176,9 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 
 ## 新增一个 agent CLI
 
-适配层很薄,七个字段就能覆盖:命令模板 / 非交互 flag / 只读 flag / 输出提取 / 超时 / 认证 / 信任门禁。
+适配层很薄,八个字段就能覆盖:命令模板 / 非交互 flag / 只读 flag / 输出提取 / 事件流粒度 / 超时 / 认证 / 信任门禁。
+
+**事件流粒度必须实测。** 超时是按"吐字间隔"判的——只要 agent 还在出事件就一直等,连续 90 秒没动静才算卡死。所以一个 CLI 到底是逐 token 吐、逐阶段吐,还是憋到最后一次性吐,直接决定超时怎么判。猜错会稳定误杀它。
 
 完整步骤见 [`references/adapting-new-cli.md`](skills/trundle-discuss/references/adapting-new-cli.md)。
 

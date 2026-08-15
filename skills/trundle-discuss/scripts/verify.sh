@@ -15,11 +15,23 @@ bad()  { printf '  ✗ %s\n' "$1"; fail=$((fail + 1)); }
 note() { printf '  ! %s\n' "$1"; warn=$((warn + 1)); }
 
 echo "── 基础工具 ──"
-# 本 skill 刻意不依赖 jq / GNU timeout —— 这些在 macOS 上都要额外装。
+# 本 skill 刻意不依赖 jq —— json 在 Python 标准库里,再装一个 jq 是白付依赖。
 # 下面几个是 POSIX 标准命令,任何 Linux/macOS 都自带,检查只为兜底。
 for b in sleep mktemp date grep; do
   command -v "$b" >/dev/null 2>&1 && ok "$b" || bad "$b 缺失(这不该发生)"
 done
+
+# invoke 的实现在 invoke.py,这是唯一的硬依赖
+if ! command -v python3 >/dev/null 2>&1; then
+  bad "python3 缺失 —— invoke.py 跑不起来"
+  echo "      macOS : xcode-select --install(系统不预装 python3)"
+  echo "      Debian/Ubuntu : sudo apt install python3"
+  echo "      Arch  : sudo pacman -S python"
+elif ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' 2>/dev/null; then
+  bad "python3 版本过低(需 >= 3.8):$(python3 -V 2>&1)"
+else
+  ok "python3 ($(python3 -V 2>&1 | cut -d' ' -f2))"
+fi
 
 command -v git >/dev/null 2>&1 && ok "git" || note "git 缺失 —— codex 的 git repo 检查会走 fallback"
 
@@ -80,6 +92,17 @@ for s in invoke.sh discover.sh install.sh verify.sh; do
     ok "$s"
   fi
 done
+
+p="$SCRIPT_DIR/invoke.py"
+if [ ! -f "$p" ]; then
+  bad "invoke.py 不存在 —— invoke.sh 只是转调 wrapper,没有它什么都跑不了"
+elif ! command -v python3 >/dev/null 2>&1; then
+  note "invoke.py 语法未检查(没有 python3)"
+elif ! python3 -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" "$p" 2>/dev/null; then
+  bad "invoke.py 语法错误"
+else
+  ok "invoke.py"
+fi
 
 echo
 if [ "$fail" -gt 0 ]; then

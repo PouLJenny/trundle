@@ -3,13 +3,25 @@
 # 声明「某个 CLI 怎么调」。用户选了哪些、各自站位是什么,在名册里
 # (~/.claude/trundle-discuss/roster.yaml),不在这个文件——本文件会随 skill 更新被覆盖。
 #
-# 新增一个 agent 要填满七个字段,见 references/adapting-new-cli.md。
-# 字段集合来自实测,比"六字段就能覆盖"的初始设想多出第 7 项 trust:
-# 两家主流 CLI 都有信任目录门禁,且绕过门禁有真实代价,不是可选项。
+# 新增一个 agent 要填满八个字段,见 references/adapting-new-cli.md。
+# 字段集合来自实测:比"六字段就能覆盖"的初始设想多出 trust(两家主流 CLI
+# 都有信任目录门禁,绕过有真实代价)和 progress(事件流粒度决定超时怎么判)。
 
 defaults:
-  timeout: 120          # 秒。实测正常延迟 6-14s,120s 足够覆盖长回答
-  parallel: true        # 多 agent 用 & + wait,总耗时取 max 而非 sum
+  # 超时不是墙钟,是「吐字间隔」。只要 agent 还在出事件(读文件、思考、吐字)
+  # 就一直等 —— 固定墙钟会在 agent 明明干得好好的时候把它砍掉。
+  idle: 90              # 秒。连续这么久没有任何事件才判定卡死
+  first_byte_grace: 180 # 首个事件前的宽限。实测 gemini 要 42s 才出首字节
+  # 绝对上限。空闲超时防不住工具循环 —— agent 可以一直"活跃"地反复读同一批
+  # 文件。540 不是 600:Claude Code 的 Bash 工具最大 timeout 就是 600s,
+  # 本脚本必须先于它开枪,否则调用方连失败分类都拿不到。
+  max_wall: 540
+  parallel: true        # 多 agent 各一个 reader 线程,总耗时取 max 而非 sum
+
+  # progress 取值,决定超时怎么判:
+  #   token —— 有 token 级 delta,空闲超时最灵敏
+  #   item  —— 只有阶段性事件(工具调用/整条消息),空闲超时按阶段判
+  #   none  —— 没有任何活动信号,只能退化成墙钟。接纳前必须实测,猜不出来
 
 # ─────────────────────────────────────────────────────────────
 # 所有 agent 通用的调用纪律(踩过的坑,勿删)
@@ -30,12 +42,17 @@ agents:
 
   codex:
     verified: true                    # 实测通过 B1-B3(2026-08)
-    cmd: codex exec {flags} {prompt}
+    cmd: codex exec --json {flags} {prompt}
     noninteractive_flags: []          # codex exec 本身即非交互模式
     # 只读沙箱。注意 --full-auto 是废弃兼容 flag,不要用
     readonly_flags: ["--sandbox", "read-only"]
-    extract: stdout                   # 最终消息走 stdout,progress 走 stderr
-    timeout: 120
+    # --json 让 stdout 变成 JSONL 事件流。正文取最后一条
+    # item.completed 且 item.type == agent_message 的 .item.text ——
+    # 与官方 -o/--output-last-message 同义,但少一个临时文件。
+    extract: jsonl:item.completed/agent_message
+    progress: item                    # 事件粒度:工具调用 / 整条消息,无 token delta
+    # JSONL 里的 item.type == "error" 常常是无害警告(实测那条
+    # "Skill descriptions were shortened" 就是),不能据此判失败
     auth_env: []                      # 复用 ~/.codex 已有登录态
     trust:
       # codex 要求 cwd 在 git repo 内,否则拒绝启动。
@@ -50,13 +67,15 @@ agents:
 
   gemini:
     verified: true
-    cmd: gemini {flags} -p {prompt}
-    noninteractive_flags: []          # -p 在非 TTY 下即 headless,直接输出纯正文
+    cmd: gemini {flags} -o stream-json -p {prompt}
+    noninteractive_flags: []          # -p 在非 TTY 下即 headless
     readonly_flags: ["--approval-mode", "plan"]   # plan 模式可读可搜,不可写不可执行
-    # 不用 --output-format json:那样正文埋在 .response 里,得靠 jq 抠出来,
-    # 为了省掉一个 macOS 上要额外装的依赖,直接吃纯文本输出。
-    extract: stdout
-    timeout: 120
+    # -o stream-json 给 token 级 delta。正文 = 拼接所有
+    # type==message && role==assistant && delta==true 的 .content。
+    # (不用一次性的 --output-format json:那样正文埋在 .response 里,而且
+    #  整轮零活动信号,空闲超时无从判起。)
+    extract: jsonl:message/assistant/delta
+    progress: token
     auth_env: []                      # ~/.gemini/settings.json 已配认证
     trust:
       # ★ 这里是整个适配库最重要的一条,不要图省事 ★
@@ -82,11 +101,15 @@ agents:
     verified: true
     # 注意:这是作为「参与者」的 claude CLI 子进程,
     # 与运行本 skill 的主持人 Claude 不是一回事,不能被 @ 混淆。
-    cmd: claude {flags} -p {prompt}
+    cmd: claude {flags} --output-format stream-json --verbose --include-partial-messages -p {prompt}
+    # --verbose 是 stream-json 在 -p 模式下的硬要求;
+    # --include-partial-messages 才有 token 级 delta。
+    # 这两个不是为了好看:claude 的纯文本模式实测「54s 内 0 字节,然后一把吐
+    # 3926 字节」—— 整轮没有任何活动信号,空闲超时根本无从判起。
     noninteractive_flags: []
     readonly_flags: ["--allowedTools", "Read,Glob,Grep"]   # 白名单里没有写工具
-    extract: stdout
-    timeout: 180
+    extract: jsonl:result           # 正文取末条 type==result 的 .result,权威且已去重
+    progress: token
     # 必须清掉这个变量,否则子进程认为自己在嵌套 session 里而报错
     env_unset: ["CLAUDECODE"]
     auth_env: []

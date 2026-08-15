@@ -20,7 +20,7 @@ if [ -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
 fi
 
 ln -sfn "$SKILL_DIR" "$TARGET"
-chmod 755 "$SKILL_DIR"/scripts/*.sh
+chmod 755 "$SKILL_DIR"/scripts/*.sh "$SKILL_DIR"/scripts/*.py
 
 echo "✓ 已链接 $TARGET → $SKILL_DIR"
 echo
