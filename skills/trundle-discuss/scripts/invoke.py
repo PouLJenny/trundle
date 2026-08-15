@@ -64,7 +64,23 @@ def envint(name, default):
         return default
 
 
-IDLE = envint("DISCUSSION_IDLE", 90)
+# 空闲上限按 agent 的**事件粒度**定,不是一个全局常数 —— 这是实测教训:
+#
+#   token 级(gemini/claude):delta 持续到达,90s 没动静确实等于卡死。
+#   item  级(codex)  :只有工具调用和整条消息两种事件,**生成最终回答的
+#                      全过程一个事件都不发**。实测生成速率约 25 字符/秒,
+#                      1400 字的回答就静默 58s;讨论场景里上下文大、回答长,
+#                      破 90s 是常态。用 90s 卡它,恰好砍在它要说出正文那一刻。
+#
+# DISCUSSION_IDLE 一旦显式设置就覆盖所有 agent(调试用)。
+IDLE_DEFAULT = 90
+_IDLE_OVERRIDE = envint("DISCUSSION_IDLE", 0) or None
+
+
+def idle_for(run):
+    if _IDLE_OVERRIDE:
+        return _IDLE_OVERRIDE
+    return (run.spec or {}).get("idle", IDLE_DEFAULT)
 # 首个事件到达前的宽限。实测 gemini 要 42s 才出首字节,用 IDLE 卡首字节会误杀。
 GRACE = envint("DISCUSSION_FIRST_BYTE_GRACE", 180)
 # 540 不是 600,是刻意的:Claude Code 的 Bash 工具最大 timeout 就是 600s。
@@ -81,6 +97,7 @@ TERM_GRACE = 5      # TERM 之后等多久补 KILL
 POLL = 0.5          # 看门狗轮询间隔
 TICK = 5            # 状态行最短间隔
 TICK_FORCE = 15     # 状态行强制心跳间隔
+SILENCE_HINT = 20   # 静默超过这么久就在状态行里显示计时,让超时可预见
 # 回显攒够多少字符就吐一行(没有换行时)。按中文标定:60 太大,一整句
 # 短回答都凑不满一次,结果全程不回显、结束时才一把吐出。
 ECHO_CHUNK = 24
@@ -320,10 +337,13 @@ AGENTS = {
         "parse": parse_codex,
         "precheck": None,
         "unset_env": [],
+        # item 级事件 —— 生成回答期间完全静默,见 idle_for 上方的注释
+        "idle": 300,
     },
     "gemini": {
         "build": build_gemini,
         "parse": parse_gemini,
+        "idle": 90,                 # token 级 delta,没动静就是真没动静
         # 未 trust 就不喷,并给补救指引 —— 绝不用环境变量绕过
         "precheck": lambda: None if gemini_is_trusted()
         else ("untrusted", UNTRUSTED_MSG % os.getcwd()),
@@ -335,6 +355,7 @@ AGENTS = {
         "precheck": None,
         # 必须清掉 CLAUDECODE,否则子进程认为自己在嵌套 session 里而报错
         "unset_env": ["CLAUDECODE"],
+        "idle": 90,                 # token 级 delta(思考阶段也有 thinking_delta)
     },
 }
 
@@ -366,6 +387,7 @@ class Run(object):
         self.proc = None
         self.rc = None
         self.killed = None          # "idle" | "maxwall"
+        self.progress_at_kill = None
         self.started = None
         self.wall = 0.0
         self.last_activity = None
@@ -416,6 +438,9 @@ class Run(object):
 
     def kill(self, why):
         self.killed = why
+        # 开枪那一刻它在干什么 —— 排查误杀的第一手证据。
+        # 不能等到 classify 再读 progress,那时已被 waiter 覆盖成「已中止」。
+        self.progress_at_kill = self.progress
         proc = self.proc
         if proc is None or proc.poll() is not None:
             return
@@ -531,7 +556,8 @@ def launch(run):
         for t in threads:
             t.join(timeout=5)
         run.wall = time.monotonic() - run.started
-        run.progress = "完成 %.1fs" % run.wall
+        # 被杀的不能报「完成」—— 那一行紧接着就是 timeout,自相矛盾且误导排查
+        run.progress = ("已中止 %.1fs" if run.killed else "完成 %.1fs") % run.wall
         run.done.set()
 
     threading.Thread(target=waiter, daemon=True).start()
@@ -554,9 +580,15 @@ def classify(run):
     if run.status:                      # untrusted / 启动失败,已经定了
         return
     if run.killed == "idle":
+        limit = idle_for(run) if run.got_event else GRACE
         run.status = "timeout"
-        run.note = ("连续 %ds 没有任何输出,判定卡死并中止(已等 %.0fs)。本轮缺少 %s 的发言。\n"
-                    "如果它本来就慢,调大 DISCUSSION_IDLE。" % (IDLE, run.wall, run.name))
+        run.note = ("连续 %ds 没有任何事件,判定卡死并中止(已等 %.0fs)。本轮缺少 %s 的发言。\n"
+                    "最后的状态是「%s」。\n\n"
+                    "注意:静默不一定等于卡死。事件粒度粗的 agent(codex 只有 item 级事件)"
+                    "在生成回答的整个过程中不发任何事件,回答越长静默越久。\n"
+                    "如果最后状态是「发言中」或刚做完一次工具调用,它很可能是被砍在正要说话那一刻——"
+                    "调大 DISCUSSION_IDLE 再试。"
+                    % (limit, run.wall, run.name, run.progress_at_kill or "未知"))
         return
     if run.killed == "maxwall":
         run.status = "timeout"
@@ -576,8 +608,15 @@ def classify(run):
 
 # ── 状态行 ───────────────────────────────────────────────────
 
-def status_body(runs):
-    """不含秒数的状态串。秒数每次都变,拿它去重等于不去重。"""
+def status_body(runs, silence=False):
+    """状态串。
+
+    silence=False 的版本用来去重 —— 秒数每次都变,拿它比较等于不去重。
+    silence=True 的版本用来显示,额外带上「静默 Ns」。
+    静默时长必须可见:否则 agent 被空闲超时砍掉时,日志上看不出任何征兆,
+    读起来就像误杀(而它可能真的是误杀,也可能只是它在闷头写正文)。
+    """
+    now = time.monotonic()
     parts = []
     for r in runs:
         if r.done.is_set():
@@ -587,6 +626,11 @@ def status_body(runs):
         size = r.size()
         if size and (r.echo_capped or not r.echoed):
             note = "%s %s" % (note, human(size))
+        if silence and r.last_activity is not None:
+            quiet = int(now - r.last_activity)
+            if quiet >= SILENCE_HINT:
+                note = "%s · 静默 %ds/%ds" % (
+                    note, quiet, idle_for(r) if r.got_event else GRACE)
         parts.append("%s ▸ %s" % (r.name, note))
     return " │ ".join(parts)
 
@@ -609,7 +653,7 @@ def watch(runs):
             if now - r.started >= MAXWALL:
                 r.kill("maxwall")
                 continue
-            limit = IDLE if r.got_event else GRACE
+            limit = idle_for(r) if r.got_event else GRACE
             if now - r.last_activity >= limit:
                 r.kill("idle")
         elapsed = now - start
@@ -617,8 +661,9 @@ def watch(runs):
             body = status_body(runs)
             # 状态没变就不刷屏 —— 一条跑一分钟的命令不该刷出十几行同样的字。
             # 但也不能完全沉默,所以每 TICK_FORCE 秒强制心跳一次。
+            # 去重用不带静默计时的版本,显示用带的。
             if body != last_text or elapsed - last_tick >= TICK_FORCE:
-                emit("%ds │ %s" % (int(elapsed), body))
+                emit("%ds │ %s" % (int(elapsed), status_body(runs, silence=True)))
                 last_text = body
                 last_tick = elapsed
         time.sleep(POLL)

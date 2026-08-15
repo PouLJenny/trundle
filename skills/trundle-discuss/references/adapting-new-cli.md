@@ -19,6 +19,7 @@
     readonly_flags: []                # ★ 关键:禁止写入/执行的 flag
     extract: jsonl:<哪条事件的哪个字段>  # 正文怎么拿
     progress: token | item | none     # ★ 事件流粒度,必须实测
+    idle: 90                          # ★ 由 progress 决定,见下
     auth_env: []                      # 需要的认证环境变量
     trust:
       check: none                     # none | git_repo | <自定义检查>
@@ -75,6 +76,16 @@ ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 - **全部时间戳挤在最后一秒** → `none`,它没有真正的流式输出
 
 第三种必须当场发现。猜成 `token` 而实际是 `none`,空闲超时会稳定误杀它。
+
+**`progress` 直接决定 `idle` 该填多少**,别照抄 90:
+
+| progress | idle | 为什么 |
+|---|---|---|
+| `token` | 90 | delta 持续到达,没动静就是真没动静 |
+| `item` | **300** | 生成回答期间通常完全静默,静默时长随回答长度增长 |
+| `none` | —— | 空闲超时对它无意义,只受 `max_wall` 约束,注释里必须写清楚 |
+
+`item` 那一档的 300 是实测来的:codex 一次 8.0K 字的回答静默了约 70s,而讨论场景上下文更大时会破 90s——用 90s 卡它,恰好砍在它要说出正文那一刻。**判这一档时,请专门跑一次"让它写一篇很长的回答",测最后一个事件到进程结束之间的间隔。**
 
 **⑤ 站位不重复**
 

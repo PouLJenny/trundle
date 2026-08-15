@@ -145,18 +145,50 @@ Failed to read prompt from stdin: Resource temporarily unavailable (os error 11)
 
 | 环境变量 | 默认 | 判什么 |
 |---|---|---|
-| `DISCUSSION_IDLE` | 90s | 连续这么久没有**任何事件**才算卡死 |
-| `DISCUSSION_FIRST_BYTE_GRACE` | 180s | 首个事件到达前的宽限 |
+| `DISCUSSION_IDLE` | **按 agent 定**(见下) | 连续这么久没有**任何事件**才算卡死 |
+| `DISCUSSION_FIRST_BYTE_GRACE` | 180s | 首个**实质**事件到达前的宽限 |
 | `DISCUSSION_MAX_WALL` | 540s | 绝对上限(旧名 `DISCUSSION_TIMEOUT` 仍可用) |
 
 - **为什么要首字节宽限**:实测 gemini 要 42s 才吐出第一个字节。用 IDLE 卡首字节会稳定误杀。
+  注意「实质」两个字:gemini 启动时立刻发一个 `init` 事件,然后可能静默 90s 以上才出正文。把 `init` 当首字节会让宽限期白白作废,然后被 IDLE 误杀。所以握手类事件(`init` / `turn.started`)不结束宽限期。
 - **为什么空闲超时之外还要绝对上限**:空闲超时防不住工具循环——agent 可以一直很"活跃"地反复读同一批文件,永远不结束。MAXWALL 是那种情况唯一的出口。
 - **为什么 540 不是 600**:见上「必须调大 Bash 工具的 timeout」。
 
-`timeout` 状态因此有两种含义,脚本会在正文里写明是哪一种:
+### ★ IDLE 必须按事件粒度分别定 ★
+
+一个全局 IDLE 是错的,这是实测踩出来的:
+
+| agent | progress | idle | 理由 |
+|---|---|---|---|
+| codex | `item` | **300s** | 只有工具调用和整条消息两种事件,**生成最终回答的全过程一个事件都不发** |
+| gemini | `token` | 90s | delta 持续到达,没动静就是真没动静 |
+| claude | `token` | 90s | 思考阶段也有 `thinking_delta` |
+
+实测证据:codex 一次 8.0K 字的回答,生成期间静默约 70s;讨论场景里上下文更大、回答更长时会破 90s。用 90s 卡它,**恰好砍在它要说出正文那一刻**——而日志上看起来像"它卡死了",极易误判成脚本 bug。
+
+codex 没有开启 token 级事件的开关(`codex features list` 里 `apply_patch_streaming_events` 和 `concurrent_reasoning_summaries` 都是 under development,而且都覆盖不到最终回答的生成阶段),所以只能在超时侧让步。上限仍受 `max_wall` 约束。
+
+显式设 `DISCUSSION_IDLE` 会覆盖所有 agent(调试用)。
+
+### 静默是可见的
+
+状态行在静默超过 20s 后会带上计时,这样超时是可预见的,而不是突然发生:
 
 ```
-连续 90s 没有任何输出,判定卡死并中止(已等 213s)。
+··· 154s │ codex ▸ 执行命令 rtk npm view @openai/codex version… 477字 · 静默 45s/300s
+··· 169s │ codex ▸ 执行命令 rtk npm view @openai/codex version… 477字 · 静默 60s/300s
+··· 179s │ codex ▸ 已完成 8.0K字
+```
+
+没有这个计时,上面这段看起来就是"codex 卡了 60 秒然后莫名其妙好了"。
+
+`timeout` 状态有两种含义,脚本会在正文里写明是哪一种,并附上**开枪那一刻它在干什么**:
+
+```
+连续 300s 没有任何事件,判定卡死并中止(已等 380s)。
+最后的状态是「发言中」。
+→ 最后状态是「发言中」或刚做完工具调用 = 大概率被砍在正要说话那一刻,调大 IDLE
+
 达到 540s 绝对上限并中止,可能陷入了工具循环。
 ```
 

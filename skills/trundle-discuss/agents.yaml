@@ -10,7 +10,13 @@
 defaults:
   # 超时不是墙钟,是「吐字间隔」。只要 agent 还在出事件(读文件、思考、吐字)
   # 就一直等 —— 固定墙钟会在 agent 明明干得好好的时候把它砍掉。
-  idle: 90              # 秒。连续这么久没有任何事件才判定卡死
+  #
+  # ★ idle 必须按 progress 粒度分别定,不能用一个全局值 ★
+  # 实测教训:codex 只有 item 级事件,**生成最终回答的全过程一个事件都不发**。
+  # 实测一次 8.0K 字的回答静默了约 70s,上下文更大时轻松破 90s ——
+  # 用 90s 卡它,恰好砍在它要说出正文那一刻,而日志上看起来像"它卡死了"。
+  # 所以 codex 单独给 300s(见下),token 级的 gemini/claude 才用 90s。
+  idle: 90              # 秒。连续这么久没有任何事件才判定卡死(各 agent 可覆盖)
   first_byte_grace: 180 # 首个事件前的宽限。实测 gemini 要 42s 才出首字节
   # 绝对上限。空闲超时防不住工具循环 —— agent 可以一直"活跃"地反复读同一批
   # 文件。540 不是 600:Claude Code 的 Bash 工具最大 timeout 就是 600s,
@@ -51,6 +57,12 @@ agents:
     # 与官方 -o/--output-last-message 同义,但少一个临时文件。
     extract: jsonl:item.completed/agent_message
     progress: item                    # 事件粒度:工具调用 / 整条消息,无 token delta
+    # ★ 300 不是 90 ★ item 级粒度意味着生成回答期间完全静默。
+    # 实测:一次 8.0K 字的回答静默约 70s;讨论场景上下文更大时会破 90s。
+    # codex 没有开启 token 级事件的开关(features list 里 apply_patch_streaming_events
+    # 和 concurrent_reasoning_summaries 都是 under development,且都覆盖不到
+    # 最终回答的生成阶段),所以只能在超时侧让步。上限仍受 max_wall 约束。
+    idle: 300
     # JSONL 里的 item.type == "error" 常常是无害警告(实测那条
     # "Skill descriptions were shortened" 就是),不能据此判失败
     auth_env: []                      # 复用 ~/.codex 已有登录态
@@ -76,6 +88,7 @@ agents:
     #  整轮零活动信号,空闲超时无从判起。)
     extract: jsonl:message/assistant/delta
     progress: token
+    idle: 90                          # token 级 delta,没动静就是真没动静
     auth_env: []                      # ~/.gemini/settings.json 已配认证
     trust:
       # ★ 这里是整个适配库最重要的一条,不要图省事 ★
@@ -110,6 +123,7 @@ agents:
     readonly_flags: ["--allowedTools", "Read,Glob,Grep"]   # 白名单里没有写工具
     extract: jsonl:result           # 正文取末条 type==result 的 .result,权威且已去重
     progress: token
+    idle: 90                        # 思考阶段也有 thinking_delta,不会假性静默
     # 必须清掉这个变量,否则子进程认为自己在嵌套 session 里而报错
     env_unset: ["CLAUDECODE"]
     auth_env: []
