@@ -6,11 +6,12 @@
 
 完整步骤见 [`skills/trundle-discuss/references/adapting-new-cli.md`](skills/trundle-discuss/references/adapting-new-cli.md)。提 PR 时请附上:
 
-- [ ] 填好的七个字段(命令模板 / 非交互 flag / 只读 flag / 输出提取 / 超时 / 认证 / 信任门禁)
+- [ ] 填好的八个字段(命令模板 / 非交互 flag / 只读 flag / 输出提取 / 事件流粒度 / 超时 / 认证 / 信任门禁)
 - [ ] **只读验证的实际输出** —— 见下,这一项不能省
+- [ ] **事件流粒度的实际输出**(带时间戳)—— 证明 `progress` 是实测的不是猜的
 - [ ] 一次真实调用的耗时
 - [ ] CLI 版本号
-- [ ] `invoke.sh` 里对应的 case 分支
+- [ ] `invoke.py` 里对应的 `AGENTS` 条目和 `parse_<cli>` 函数
 - [ ] 一个不与现有重复的站位(`stance`)
 
 ### 只读 flag 必须实测
