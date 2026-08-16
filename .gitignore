@@ -1,5 +1,7 @@
 # 讨论记录 —— 含完整讨论内容,不要提交
+# (.claude/trundle-discuss/ 是旧路径,本仓库的既有记录还在那里;.trundle/ 是新路径)
 .claude/trundle-discuss/
+.trundle/
 
 # 本地测试用的项目级 skill 软链(指向本仓库的 skills/,不必提交)
 .claude/skills/
@@ -11,3 +13,6 @@
 # Python
 __pycache__/
 *.py[cod]
+
+# moderator spike 的运行产物(prompt 文件与原始 round plan)
+spike/moderator/out/

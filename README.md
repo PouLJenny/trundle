@@ -3,10 +3,10 @@
 [![CI](https://github.com/PouLJenny/trundle/actions/workflows/ci.yml/badge.svg)](https://github.com/PouLJenny/trundle/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> **trundle-discuss** —— 把 Claude Code 的单人对话变成回合制群聊。
+> **trundle** —— 把 Claude Code 的单人对话变成回合制群聊(skill:`/trundle:discuss`)。
 > 让 codex、gemini 等 CLI agent 加入你正在进行的技术讨论,**而你是参与者,不是等报告的人**。
 
-**Claude Code 是主持人,你装的其他 CLI agent 是被拉进来的参与者。**
+**Claude Code 是讨论的当事方;每轮「谁发言、喂什么、怎么收尾」由一个独立的 moderator agent 产出计划;你装的其他 CLI agent 是被拉进来的参与者。**
 
 > **English**: A Claude Code skill that turns your solo conversation into a turn-based group discussion with codex / gemini / other CLI agents. You stay in the discussion as a participant — it does not run an unattended debate and hand you a report. Docs are in Chinese.
 
@@ -55,14 +55,35 @@ Claude:codex 不同意我的方案。分歧不在实现,在**要不要做这件�
 - **让 agent 互相听见。** 喂给每个 agent 的上下文带其他 agent 上一轮的发言**并且署名**。这是"三份独立 review"变成"讨论"的唯一开关 —— 有署名才会产生指向性反驳,没署名就只会各说各的。
 - **一致 ≠ 正确。** 固定站位会制造伪共识:给 gemini 设"盯是不是解错了问题"的站位,它几乎必然说"你们解错了问题"。所有人一致时,先怀疑是提问方式把答案喂了进去。
 
+## 工作原理
+
+三种角色,三份权责:
+
+- **host(Claude Code)**——讨论的**当事方**:亮自己的立场、和你争、被别人反驳。同时是执行者:照计划调用、渲染、记 transcript。
+- **moderator(独立 CLI agent,默认 codex,可在名册配置)**——每轮的**裁量**:谁发言、prompt 怎么组、怎么收尾,输出一份可机械校验的 round plan(协议见 [`skills/discuss/protocol/moderator.md`](skills/discuss/protocol/moderator.md))。实测 13–47s/轮;计划坏了会带反馈自动重试一次;moderator 整个缺席时 host 按同一份协议自行主持(降级模式,会明说)。
+- **参与者(codex / gemini / claude / dsh 子进程)**——**全程只读**,每次调用无状态。
+
 ## 安装
+
+**方式一:plugin(推荐)**——在 Claude Code 里:
+
+```
+/plugin marketplace add PouLJenny/trundle
+/plugin install trundle@trundle
+```
+
+装完重启会话,skill 名是 `/trundle:discuss`。
+
+**方式二:软链(开发者路径)**——skill 名是 `/discuss`:
 
 ```bash
 git clone https://github.com/PouLJenny/trundle.git
 cd trundle
-./skills/trundle-discuss/scripts/install.sh    # 软链进 ~/.claude/skills/
-./skills/trundle-discuss/scripts/verify.sh     # 自检依赖
+./skills/discuss/scripts/install.sh    # 软链进 ~/.claude/skills/
+./skills/discuss/scripts/verify.sh     # 自检依赖
 ```
+
+**两种方式二选一**——同时装会出现两个同内容的 skill。老用户注意:曾软链安装过旧版(目录名 trundle-discuss)的,先 `rm ~/.claude/skills/trundle-discuss` 再装,否则新旧并存;你的名册和讨论记录路径没变,原地可用。
 
 **前置依赖**(只有三条)
 
@@ -93,7 +114,7 @@ cd trundle
 三条路,**都以你点头收尾**(Claude 不会自作主张把你拖进讨论模式):
 
 ```
-/trundle-discuss 订阅计费怎么改      显式命令
+/trundle:discuss 订阅计费怎么改      显式命令
 「叫上 codex 一起聊聊这个」          口头声明
 ```
 
@@ -103,7 +124,9 @@ cd trundle
 
 ### 第一次会让你挑参与者
 
-扫描本机可用的 CLI → 你勾选 → 给每人分一个**整场不变的站位** → 写进 `~/.claude/trundle-discuss/roster.yaml`。之后不再问。
+扫描本机可用的 CLI → 你勾选 → 给每人分一个**整场不变的站位** → 写进名册 `~/.config/trundle/roster.yaml`。之后不再问。老版本的名册在 `~/.claude/trundle-discuss/roster.yaml`——还在那里的会被自动回退读取,零迁移;也可用环境变量 `TRUNDLE_ROSTER` 显式指定。名册路径是 host 无关的:将来换别的 host 跑这个 skill,读的还是同一份。
+
+名册顶部还可以写一行 `moderator: <名>` 选每轮产计划的裁量模型,缺省是 `codex`(实测最稳最快)。指定的没装或没过前置检查时会**响亮**回退,不静默换人。
 
 建议 2 人,上限 3 人:并行调用的等待时间取最慢那个,而且人越多越容易互相点头。**两个 agent 不能分到同一站位** —— 重复视角既是伪共识的燃料,又白付一份延迟。
 
@@ -118,7 +141,7 @@ cd trundle
 | 「把 cline 加进来」 | 中途加人 |
 | 「让 gemini 退出」 | 踢出名册 |
 | 「这轮别带 gemini」 | 仅本轮跳过 |
-| `/trundle-discuss agents` | 重新挑参与者 |
+| `/trundle:discuss agents` | 重新挑参与者 |
 | 「退出讨论」「开始写吧」 | 结束 |
 
 **`@` 的原话是原样转达的。** 你可以直接怼某个 agent:
@@ -186,7 +209,7 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 
 `dsh` 就是第三档:它从头到尾一个字都不吐,8.36s 时首字节和末字节同时到达。这一档**不能靠调大超时救**,必须整体跳过空闲判定——否则它一旦跑超过首字节宽限就会被判成"压根没开始",然后请你去拧一个对它不通电的开关。
 
-完整步骤见 [`references/adapting-new-cli.md`](skills/trundle-discuss/references/adapting-new-cli.md)。
+完整步骤见 [`references/adapting-new-cli.md`](skills/discuss/references/adapting-new-cli.md)。
 
 **只读约束必须实测确认,不能猜。** 猜错非交互 flag 只是挂掉;**猜错只读约束会让它拿到写你代码库的权限**。所以扫描到未登记的 CLI 时,本项目只会列出来告诉你,绝不擅自调用。
 
@@ -194,7 +217,7 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 
 ## 隐私与成本
 
-- 讨论记录会落盘到 `<你的项目>/.claude/trundle-discuss/`,含完整讨论内容。仓库自带的 `.gitignore` 已包含它,注意别提交进你自己的仓库
+- 讨论记录会落盘到 `<你的项目>/.trundle/`(老项目若已有 `.claude/trundle-discuss/` 则继续写那里,记录不劈成两份),含完整讨论内容。注意别提交进你自己的仓库
 - **你的讨论内容会被发送给你选中的每个 CLI 对应的服务商**
 - 每次拉人都是真实的 API 调用,产生真实费用。这也是"默认不拉人"的现实理由之一
 
@@ -208,6 +231,8 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 | dsh 全程没有任何进度,看起来像卡住了 | 它**没有事件流**:整轮 stdout 零输出,跑完才一次性给出全文 | **这是正常的**。状态行会显示「已跑 Ns(上限 300s)」而不是倒计时。要放宽等待只能调 `DISCUSSION_MAX_WALL`——`DISCUSSION_IDLE` 和 `DISCUSSION_FIRST_BYTE_GRACE` 对它完全无效 |
 | codex 报 `Failed to read prompt from stdin` / os error 11 | 并行调用时 stdin 是不可读管道,codex 以为有 piped 输入 | 调用加 `</dev/null`(内置脚本已处理) |
 | 装了但 skill 不触发 | skill 不热加载 | 重启 Claude Code 会话 |
+| 提示「moderator 缺席 · 本轮由我自行主持」 | 选中的 moderator CLI 没装 / 没过前置检查 / 超预算 | 跑 `verify.sh` 看哪个 CLI 可用;要换模型在名册顶部写 `moderator: <名>`。降级不中止讨论,只是裁量回到 host 脑内 |
+| 状态行提到 round plan 重试(retry=1) | moderator 偶发输出损坏 JSON(实测 14 次里 1 次) | 自动的,不用管;如果**每轮**都重试,请开 issue 附 moderate.py 输出 |
 | 每轮都有一堆 agent 抢着发言 | 协议没生效 | 默认应该只有 Claude 说话 —— 请开 issue |
 | Claude 给了"综合考虑建议 A" | 协议没生效 | 分歧未解决时这是违规行为 —— 请开 issue |
 

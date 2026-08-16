@@ -1,0 +1,13 @@
+{
+  "name": "trundle",
+  "version": "1.0.0",
+  "description": "Turn your solo Claude Code conversation into a turn-based group discussion with codex / gemini / other CLI agents — you stay in as a participant, not a report reader.",
+  "author": {
+    "name": "PouLJenny",
+    "url": "https://github.com/PouLJenny"
+  },
+  "repository": "https://github.com/PouLJenny/trundle",
+  "license": "Apache-2.0",
+  "keywords": ["discussion", "multi-agent", "codex", "gemini", "deliberation"],
+  "skills": "./skills/"
+}

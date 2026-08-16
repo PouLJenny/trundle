@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# trundle-discuss —— 依赖自检
+# trundle discuss —— 依赖自检
 #
 # 故意不用 set -e:要跑完所有检查再统一报结果。
 
@@ -120,16 +120,20 @@ for s in invoke.sh discover.sh install.sh verify.sh; do
   fi
 done
 
-p="$SCRIPT_DIR/invoke.py"
-if [ ! -f "$p" ]; then
-  bad "invoke.py 不存在 —— invoke.sh 只是转调 wrapper,没有它什么都跑不了"
-elif ! command -v python3 >/dev/null 2>&1; then
-  note "invoke.py 语法未检查(没有 python3)"
-elif ! python3 -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" "$p" 2>/dev/null; then
-  bad "invoke.py 语法错误"
-else
-  ok "invoke.py"
-fi
+# moderate.py 与 plan_check.py 是 moderator 引擎(v1);plan_fixtures.py 随
+# selftest 的 import 被覆盖,不在这里重复。
+for py in invoke.py moderate.py plan_check.py; do
+  p="$SCRIPT_DIR/$py"
+  if [ ! -f "$p" ]; then
+    bad "$py 不存在 —— 引擎缺件($py 是必需的,invoke.sh/moderate 都依赖它)"
+  elif ! command -v python3 >/dev/null 2>&1; then
+    note "$py 语法未检查(没有 python3)"
+  elif ! python3 -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" "$p" 2>/dev/null; then
+    bad "$py 语法错误"
+  else
+    ok "$py"
+  fi
+done
 
 echo
 echo "── 自检(纯函数,不调用任何 agent CLI)──"

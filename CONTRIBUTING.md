@@ -4,10 +4,10 @@
 
 `agents.yaml` 是这个项目的核心公共资产。每多一条经过实测的适配,就少一个人去踩同样的坑。
 
-完整步骤见 [`skills/trundle-discuss/references/adapting-new-cli.md`](skills/trundle-discuss/references/adapting-new-cli.md)。提 PR 时请附上:
+完整步骤见 [`skills/discuss/references/adapting-new-cli.md`](skills/discuss/references/adapting-new-cli.md)。提 PR 时请附上:
 
 - [ ] 填好的九个字段(命令模板 / 非交互 flag / **只读约束** / 输出提取 / 事件流粒度 / 超时 / 认证 / 诊断命令 / 信任门禁)
-- [ ] `python3 skills/trundle-discuss/scripts/selftest.py` 通过(CI 也跑它;它会检查 spec 字段齐全,以及 agents.yaml / README 与代码一致)
+- [ ] `python3 skills/discuss/scripts/selftest.py` 通过(CI 也跑它;它会检查 spec 字段齐全,以及 agents.yaml / README 与代码一致)
 - [ ] **只读验证的实际输出** —— 见下,这一项不能省
 - [ ] **事件流粒度的实际输出**(带时间戳)—— 证明 `stream` 是实测的不是猜的
 - [ ] 一次真实调用的耗时
@@ -34,15 +34,25 @@ ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 
 找不到只读模式的 CLI 仍可登记条目,但只读字段留空、标注待确认,并且**不得进默认阵容**。
 
-## 改协议(SKILL.md)要谨慎
+## 改 moderator 协议(protocol/moderator.md)要谨慎
 
-`SKILL.md` 里的 §谁在什么时候说话 / §不综合把分歧端出来 / §伪共识警告 是这个项目的全部价值。它们看起来只是几段散文,但每一句都在防一种具体的退化:
+裁量正文在 [`skills/discuss/protocol/moderator.md`](skills/discuss/protocol/moderator.md)——§谁发言 / §不综合 / §伪共识是这个项目的全部价值。它们看起来只是几段散文,但每一句都在防一种具体的退化:
 
 - 放宽"默认不拉人" → 退化成每轮三个模型互相点头,还白等 15 秒
 - 放宽"不综合" → 退化成一个普通的 AI 助手,多花了钱和时间却把用户该做的判断替他做了
 - 去掉伪共识警告 → 站位设定诱导出来的一致会被当成强信号
 
 改这几节请在 PR 里说明:你在防哪种退化,以及为什么现有措辞挡不住。
+
+**机械层的三处同步**:协议的输出格式块(枚举与字段名)、`scripts/plan_check.py`(校验器)、`scripts/plan_fixtures.py`(罐头 fixture)必须一起改——selftest 的「moderator 协议与代码一致」组会抓漂移,改一处不改另两处过不了 CI。**不设 schema_version**:协议与壳同仓同版发布,没有跨版本 wire,加版本号是白付的复杂度。
+
+**行为级改动**(裁量措辞、prompt 骨架)CI 测不了——罐头 fixture 只能验校验器,验不了「moderator 真按协议产计划」。请手动跑活体一致性工具并把输出附在 PR 里:
+
+```bash
+python3 spike/moderator/run_spike.py --models codex   # 6 个真实回合 case,全绿为准
+```
+
+`SKILL.md` 现在是薄壳(进入/退出、机械执行、渲染),改它一般不涉及裁量;若要把裁量散文加回壳里,先读一遍 multi-host 那场讨论的结论——每个 host 一份散文副本正是拆 moderator 要消灭的东西。
 
 ## 提 issue 时
 
@@ -53,11 +63,12 @@ ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 每次 push 和 PR 都会跑 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。本地一条条复现:
 
 ```bash
-python3 skills/trundle-discuss/scripts/selftest.py          # 自检(Python 3.9 / 3.13 各跑一遍)
-for f in skills/trundle-discuss/scripts/*.sh; do bash -n "$f"; done
-python3 -m py_compile skills/trundle-discuss/scripts/*.py
-python3 -c "import yaml; yaml.safe_load(open('skills/trundle-discuss/agents.yaml'))"   # 需要 pyyaml
+python3 skills/discuss/scripts/selftest.py          # 自检(Python 3.9 / 3.13 各跑一遍)
+for f in skills/discuss/scripts/*.sh; do bash -n "$f"; done
+python3 -m py_compile skills/discuss/scripts/*.py
+python3 -c "import yaml; yaml.safe_load(open('skills/discuss/agents.yaml'))"   # 需要 pyyaml
 ! grep -rn 'readlink -f' skills/
+python3 -c "import json; json.load(open('.claude-plugin/plugin.json')); json.load(open('.claude-plugin/marketplace.json'))"   # plugin 打包冒烟(CI 里还断言三处版本一致)
 ```
 
 两条说明:

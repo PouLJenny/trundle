@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: 自检(纯函数,含 agents.yaml / README 与代码的一致性断言)
-        run: python3 skills/trundle-discuss/scripts/selftest.py
+        run: python3 skills/discuss/scripts/selftest.py
 
   scripts:
     runs-on: ubuntu-latest
@@ -35,12 +35,12 @@ jobs:
 
       - name: shell 语法
         run: |
-          for f in skills/trundle-discuss/scripts/*.sh; do
+          for f in skills/discuss/scripts/*.sh; do
             bash -n "$f" || exit 1
           done
 
       - name: python 语法
-        run: python3 -m py_compile skills/trundle-discuss/scripts/*.py
+        run: python3 -m py_compile skills/discuss/scripts/*.py
 
       - name: agents.yaml 能被真正的 YAML 解析器读通
         # selftest 里那个窄提取器只认两级缩进的简单标量,一个已经损坏的 yaml
@@ -48,7 +48,7 @@ jobs:
         # PyYAML 只是 CI 依赖 —— 用户侧仍然零依赖,那条立场没变。
         run: |
           pip install --quiet pyyaml
-          python3 -c "import yaml; yaml.safe_load(open('skills/trundle-discuss/agents.yaml'))"
+          python3 -c "import yaml; yaml.safe_load(open('skills/discuss/agents.yaml'))"
 
       - name: CONTRIBUTING 里可机器判定的风格约束
         run: |
@@ -56,3 +56,29 @@ jobs:
             echo '::error::解析自身路径要用 `cd ... && pwd -P`,不要用 readlink -f(macOS 上行为不同)'
             exit 1
           fi
+
+      - name: plugin 打包冒烟 + 版本同步
+        # selftest 里的版本同步断言在 .claude-plugin/ 不在场时会条件跳过
+        # (plugin 拷贝安装出去的目录里没有它)。CI 的 checkout 必然两个文件
+        # 都在 —— 这里才是那条断言真正的执法处。
+        run: |
+          python3 - <<'EOF'
+          import io, json, re, sys
+          plugin = json.load(open(".claude-plugin/plugin.json"))
+          market = json.load(open(".claude-plugin/marketplace.json"))
+          assert plugin["name"] == "trundle", plugin["name"]
+          assert re.match(r"^\d+\.\d+\.\d+$", plugin["version"]), plugin["version"]
+          assert plugin["skills"] == "./skills/", plugin["skills"]
+          entry = market["plugins"][0]
+          assert entry["name"] == "trundle" and entry["source"] == "./", entry
+          assert entry["version"] == plugin["version"], (entry["version"], plugin["version"])
+          skill_version = None
+          for line in io.open("skills/discuss/SKILL.md", encoding="utf-8"):
+              m = re.match(r"^version:\s*(\S+)", line)
+              if m:
+                  skill_version = m.group(1)
+                  break
+          assert skill_version == plugin["version"], (skill_version, plugin["version"])
+          print("plugin=%s marketplace=%s SKILL.md=%s 一致" %
+                (plugin["version"], entry["version"], skill_version))
+          EOF

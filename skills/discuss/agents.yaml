@@ -1,7 +1,7 @@
 # trundle-discuss —— agent 适配库
 #
 # 声明「某个 CLI 怎么调」。用户选了哪些、各自站位是什么,在名册里
-# (~/.claude/trundle-discuss/roster.yaml),不在这个文件——本文件会随 skill 更新被覆盖。
+# (~/.config/trundle/roster.yaml,旧路径 ~/.claude/trundle-discuss/ 自动回退),不在这个文件——本文件会随 skill 更新被覆盖。
 #
 # 新增一个 agent 要填满九个字段,见 references/adapting-new-cli.md。
 # 字段集合来自实测:比"六字段就能覆盖"的初始设想多出 trust(两家主流 CLI
@@ -13,7 +13,7 @@
 # 也不该替所有场次预定立场。把它写在这里还有第二个坏处:适配库随 skill 更新被
 # 覆盖,而站位是用户偏好,两者生命周期不同,写在一起必然漂(本项目实测漂过:
 # 这里给 codex 写的是「盯实现代价」,用户名册里是「盯证据链」)。
-# 站位现在只存在于名册 ~/.claude/trundle-discuss/roster.yaml,且是可选的。
+# 站位现在只存在于名册(~/.config/trundle/roster.yaml,旧路径自动回退),且是可选的。
 
 defaults:
   # 超时不是墙钟,是「吐字间隔」。只要 agent 还在出事件(读文件、思考、吐字)
