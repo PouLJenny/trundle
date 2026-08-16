@@ -10,17 +10,17 @@ description: >-
   即使用户只是说「这块我不太确定」「我们是不是想复杂了」而当前话题是设计取舍,也应触发——但只用来**提议**进入,不直接进。
   不触发:事实查询、读代码就能确认的问题、已进入写代码/调试的执行阶段、
   用户只想要一份规格文档或评审报告(本 skill 产出的是讨论过程,不是文档)。
-version: 1.0.0
+version: 1.1.0
 license: Apache-2.0
 ---
 
 # trundle discuss
 
-把当前对话变成 Claude + 其他 CLI agent 的回合制群聊。**用户是参与方,不是审批人。产出物是讨论过程本身,不是最后那份文档。**
+把当前对话变成 host(正在读本文件的你)+ 其他 CLI agent 的回合制群聊。**用户是参与方,不是审批人。产出物是讨论过程本身,不是最后那份文档。**
 
 本文件是**壳**:只管进入/退出、机械执行和渲染。每轮「谁发言、喂什么、怎么收尾」的裁量由 **moderator**(一个独立的 CLI agent,见 `protocol/moderator.md`)产出计划,我照计划执行。我自己的发言在计划的 `host_say` 划定的边界内展开——那是指引不是讲稿,话由我自己说:我是讨论的当事方,不是传声筒。
 
-**路径约定**:下文 `<SKILL>` 指本文件所在目录(软链安装下是 `${CLAUDE_SKILL_DIR}`,plugin 安装下是 `${CLAUDE_PLUGIN_ROOT}/skills/discuss`),`<SCRIPTS>` 指 `<SKILL>/scripts`。
+**路径约定**:下文 `<SKILL>` 指本文件所在目录(Claude Code 软链安装下是 `${CLAUDE_SKILL_DIR}`,plugin 安装下是 `${CLAUDE_PLUGIN_ROOT}/skills/discuss`;其他 host 没有这些变量,就是你读到本文件的实际目录),`<SCRIPTS>` 指 `<SKILL>/scripts`。**主 host 是 Claude Code(行为已验证);其他 host 先读 `references/hosts.md` 的机制映射与支持状态。**
 
 ## 铁律
 
@@ -36,7 +36,7 @@ license: Apache-2.0
 
 1. **组装本轮输入**,写进临时文件,五段(格式见 `protocol/moderator.md` 的「输入」):
    【名册】本轮实际阵容(「这轮别带 X」在这里生效)/【共识状态头】/【讨论记录】/【主持人立场】我对议题当前的立场或内心状态,如实写,包括没把握的部分/【用户本轮消息】原话
-2. **跑 moderator**:`python3 <SCRIPTS>/moderate.py --input <文件>`。**Bash 工具的 `timeout` 必须显式设成 `600000`**——moderate.py 的总预算是 590s(含一次重试),必须让它先于 Bash 工具开枪。
+2. **跑 moderator**:`python3 <SCRIPTS>/moderate.py --input <文件>`。**必须允许它跑满 600s**——它的总预算是 590s(含一次重试),要让它先于 host 的命令超时开枪(Claude Code:Bash 工具 `timeout` 显式设 `600000`,默认 120s 会误杀;其他 host 见 `references/hosts.md`)。
 3. **照计划执行**:输出里 `===EXEC===` 给出的 invoke.sh 命令**原样执行**(同样 timeout 600000);「本轮无外部调用」则跳过。`===WARN===` 里的 soft 违规如实转告用户,不隐瞒。
 4. **渲染**所有发言(见「渲染」),然后我在 `host_say` 的边界内发言。
 5. **收尾**按 `closing`:`user_question` → 以那个问题结束回合;`fact_verdict` → **我当轮就去查/去跑**,结果以 `[事实裁定] <结论>(host 实测,第 N 轮)` 追加进 transcript 并告知用户——把事实问题推给用户是失职;`none` → 不追问。
@@ -116,7 +116,7 @@ transcript **只增不改**,署名原话是指向性反驳的唯一来源。静�
 
 参与者调用用 `===EXEC===` 给出的 `<SCRIPTS>/invoke.sh` 命令,原样执行。
 
-**所有经 Bash 工具的调用(moderate.py 与 invoke.sh)`timeout` 都必须显式设成 `600000`。** 不设就是 120s 默认,它会先于脚本自己的看门狗开枪,那一轮**连失败分类都拿不到,整段输出直接丢**。脚本的绝对上限刻意留在 600s 以内,就是为了自己先开枪。
+**moderate.py 与 invoke.sh 都必须被允许跑满 600s**——两者内置看门狗(590s/540s),会自己收尾并给出失败分类;host 若先开枪,那一轮**连失败分类都拿不到,整段输出直接丢**。Claude Code 下这意味着 Bash 工具的 `timeout` 显式设 `600000`(默认 120s);其他 host 的对应事项见 `references/hosts.md`。
 
 脚本的 stderr 里以 `···` 开头的行是**给用户看的实时进度**(逐字回显、状态行)。**解析时全部忽略,只认 `===AGENT` / `===PLAN` 分段。** 那些字用户在终端里已经看过了,不要当成 agent 的发言再渲染一遍。
 
@@ -146,6 +146,7 @@ transcript **只增不改**,署名原话是指向性反驳的唯一来源。静�
 | 文件 | 何时读 |
 |---|---|
 | `protocol/moderator.md` | 每轮裁量的完整规则与 round plan schema;降级模式下我照它主持 |
+| `references/hosts.md` | host 不是 Claude Code 时**必读**:机制映射与各 host 支持状态 |
 | `references/invocation.md` | 要改调用方式、排查 CLI 失败、看实测数据 |
 | `references/prompt-kit.md` | prompt 组装的展开说明(机器执行版以协议为准) |
 | `references/adapting-new-cli.md` | 接纳一个未登记的 CLI |

@@ -85,9 +85,18 @@ cd trundle
 
 **两种方式二选一**——同时装会出现两个同内容的 skill。老用户注意:曾软链安装过旧版(目录名 trundle-discuss)的,先 `rm ~/.claude/skills/trundle-discuss` 再装,否则新旧并存;你的名册和讨论记录路径没变,原地可用。
 
+**Codex CLI 当 host**(≥ 0.144)——codex 原生识别本仓库的 plugin 布局,同一份内容零改动直接装:
+
+```bash
+codex plugin marketplace add PouLJenny/trundle
+codex plugin add trundle@trundle
+```
+
+支持状态要说清楚:**打包、安装、skill 发现在 codex 上都实测通过;讨论行为质量未认证**(主 host 测行为、次要 host 只测打包的 superpowers 模式)。名册和讨论记录是 host 无关路径——在 Claude Code 里聊到一半换 codex 接着聊,读写的是同一份。细节与机制映射见 [`references/hosts.md`](skills/discuss/references/hosts.md)。
+
 **前置依赖**(只有三条)
 
-- **Claude Code** —— 这是 host,必需。本 skill 只在 Claude Code 里运行,不支持其他 agent 环境
+- **一个 host**:Claude Code(主 host,行为已验证)或 Codex CLI ≥ 0.144(打包已验证,行为未认证)
 - **至少一个**参与者 CLI:`codex` / `gemini` / `claude` / `dsh`
 - **python3 >= 3.8** —— 只用标准库,不需要 pip 装任何东西。Linux 一般自带;macOS 12.3+ 不预装,`xcode-select --install` 即可
 

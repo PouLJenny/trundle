@@ -1,6 +1,6 @@
 {
   "name": "trundle",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Turn your solo Claude Code conversation into a turn-based group discussion with codex / gemini / other CLI agents — you stay in as a participant, not a report reader.",
   "author": {
     "name": "PouLJenny",
