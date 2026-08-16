@@ -1,5 +1,9 @@
 # 喂给子 agent 的 prompt 怎么组装
 
+> **机器执行版在 `../protocol/moderator.md` 的「prompt 怎么组装」一节**——那份是
+> moderator 每轮真正执行的契约,改动以那边为准并同步 `scripts/plan_check.py`
+> 的断言;本文件是给人读的展开说明与实测理由。
+
 子进程无状态,每次调用都要把需要的上下文完整塞进去。
 
 ## 骨架

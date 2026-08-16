@@ -56,3 +56,29 @@ jobs:
             echo '::error::解析自身路径要用 `cd ... && pwd -P`,不要用 readlink -f(macOS 上行为不同)'
             exit 1
           fi
+
+      - name: plugin 打包冒烟 + 版本同步
+        # selftest 里的版本同步断言在 .claude-plugin/ 不在场时会条件跳过
+        # (plugin 拷贝安装出去的目录里没有它)。CI 的 checkout 必然两个文件
+        # 都在 —— 这里才是那条断言真正的执法处。
+        run: |
+          python3 - <<'EOF'
+          import io, json, re, sys
+          plugin = json.load(open(".claude-plugin/plugin.json"))
+          market = json.load(open(".claude-plugin/marketplace.json"))
+          assert plugin["name"] == "trundle", plugin["name"]
+          assert re.match(r"^\d+\.\d+\.\d+$", plugin["version"]), plugin["version"]
+          assert plugin["skills"] == "./skills/", plugin["skills"]
+          entry = market["plugins"][0]
+          assert entry["name"] == "trundle" and entry["source"] == "./", entry
+          assert entry["version"] == plugin["version"], (entry["version"], plugin["version"])
+          skill_version = None
+          for line in io.open("skills/discuss/SKILL.md", encoding="utf-8"):
+              m = re.match(r"^version:\s*(\S+)", line)
+              if m:
+                  skill_version = m.group(1)
+                  break
+          assert skill_version == plugin["version"], (skill_version, plugin["version"])
+          print("plugin=%s marketplace=%s SKILL.md=%s 一致" %
+                (plugin["version"], entry["version"], skill_version))
+          EOF

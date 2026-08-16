@@ -1,0 +1,15 @@
+{
+  "name": "trundle",
+  "owner": {
+    "name": "PouLJenny",
+    "url": "https://github.com/PouLJenny"
+  },
+  "plugins": [
+    {
+      "name": "trundle",
+      "source": "./",
+      "description": "Turn-based multi-agent discussion mode for Claude Code (skill: /trundle:discuss).",
+      "version": "1.0.0"
+    }
+  ]
+}

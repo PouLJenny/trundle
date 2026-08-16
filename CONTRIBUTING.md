@@ -34,15 +34,25 @@ ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 
 找不到只读模式的 CLI 仍可登记条目,但只读字段留空、标注待确认,并且**不得进默认阵容**。
 
-## 改协议(SKILL.md)要谨慎
+## 改 moderator 协议(protocol/moderator.md)要谨慎
 
-`SKILL.md` 里的 §谁在什么时候说话 / §不综合把分歧端出来 / §伪共识警告 是这个项目的全部价值。它们看起来只是几段散文,但每一句都在防一种具体的退化:
+裁量正文在 [`skills/discuss/protocol/moderator.md`](skills/discuss/protocol/moderator.md)——§谁发言 / §不综合 / §伪共识是这个项目的全部价值。它们看起来只是几段散文,但每一句都在防一种具体的退化:
 
 - 放宽"默认不拉人" → 退化成每轮三个模型互相点头,还白等 15 秒
 - 放宽"不综合" → 退化成一个普通的 AI 助手,多花了钱和时间却把用户该做的判断替他做了
 - 去掉伪共识警告 → 站位设定诱导出来的一致会被当成强信号
 
 改这几节请在 PR 里说明:你在防哪种退化,以及为什么现有措辞挡不住。
+
+**机械层的三处同步**:协议的输出格式块(枚举与字段名)、`scripts/plan_check.py`(校验器)、`scripts/plan_fixtures.py`(罐头 fixture)必须一起改——selftest 的「moderator 协议与代码一致」组会抓漂移,改一处不改另两处过不了 CI。**不设 schema_version**:协议与壳同仓同版发布,没有跨版本 wire,加版本号是白付的复杂度。
+
+**行为级改动**(裁量措辞、prompt 骨架)CI 测不了——罐头 fixture 只能验校验器,验不了「moderator 真按协议产计划」。请手动跑活体一致性工具并把输出附在 PR 里:
+
+```bash
+python3 spike/moderator/run_spike.py --models codex   # 6 个真实回合 case,全绿为准
+```
+
+`SKILL.md` 现在是薄壳(进入/退出、机械执行、渲染),改它一般不涉及裁量;若要把裁量散文加回壳里,先读一遍 multi-host 那场讨论的结论——每个 host 一份散文副本正是拆 moderator 要消灭的东西。
 
 ## 提 issue 时
 
@@ -58,6 +68,7 @@ for f in skills/discuss/scripts/*.sh; do bash -n "$f"; done
 python3 -m py_compile skills/discuss/scripts/*.py
 python3 -c "import yaml; yaml.safe_load(open('skills/discuss/agents.yaml'))"   # 需要 pyyaml
 ! grep -rn 'readlink -f' skills/
+python3 -c "import json; json.load(open('.claude-plugin/plugin.json')); json.load(open('.claude-plugin/marketplace.json'))"   # plugin 打包冒烟(CI 里还断言三处版本一致)
 ```
 
 两条说明:

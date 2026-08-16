@@ -510,6 +510,150 @@ def t_dsh_prompt_is_last_positional():
     assert "--profile" in argv and "headless" in argv, argv
 
 
+# ── moderator round plan 校验 ─────────────────────────────────
+#
+# 罐头 fixture 全在 plan_fixtures.py(纯数据),校验器在 plan_check.py
+# (纯函数)。零 CLI 调用、零外部状态 —— 与本文件的硬约束一致。
+
+import plan_check      # noqa: E402
+import plan_fixtures   # noqa: E402
+
+
+def t_good_plans_have_no_failures():
+    for name, plan in plan_fixtures.GOOD_PLANS:
+        results = plan_check.validate_plan(plan, plan_fixtures.ROSTER_NAMES)
+        bad = [c["check"] for c in results if not c["ok"]]
+        assert not bad, "%s: %s" % (name, bad)
+
+
+def t_bad_plans_each_hit_expected_check():
+    # 口径:目标 check 必红;不强求恰好一条红(schema 违规常连锁)。
+    for name, plan, want in plan_fixtures.BAD_PLANS:
+        results = plan_check.validate_plan(plan, plan_fixtures.ROSTER_NAMES)
+        hit = [c["check"] for c in results if not c["ok"]]
+        assert want in hit, "%s: 期望 %s,实际 %s" % (name, want, hit)
+
+
+def t_extract_json_tolerates_fence_and_chatter():
+    assert plan_check.extract_json(plan_fixtures.FENCED_RAW) is not None
+    assert plan_check.extract_json(plan_fixtures.CHATTER_RAW) is not None
+
+
+def t_extract_json_rejects_real_corruption():
+    # CORRUPTED_RAW 是真实样本(claude-moderator,spike f4 复跑):
+    # 大括号不配平,三级容忍必须接不住 —— 接住了反而说明解析器在瞎猜。
+    assert len(plan_fixtures.CORRUPTED_RAW) > 0, "损坏样本丢了"
+    assert plan_check.extract_json(plan_fixtures.CORRUPTED_RAW) is None
+
+
+def t_retry_feedback_names_failures_and_sentinel():
+    results = plan_check.validate_plan(None, plan_fixtures.ROSTER_NAMES)
+    hard = plan_check.hard_failures(results)
+    fb = plan_check.build_retry_feedback(plan_fixtures.CORRUPTED_RAW, hard)
+    assert plan_check.RETRY_SENTINEL in fb
+    assert "json_parse" in fb
+    assert "【上一次输出被拒绝】" in fb
+
+
+def t_hard_soft_split_is_stable():
+    # hard 集合就是「计划不可执行」的定义,动它等于改协议 —— 必须显式过这里。
+    results = plan_check.validate_plan(
+        dict(plan_fixtures.GOOD_PLANS[0][1]), plan_fixtures.ROSTER_NAMES)
+    hard_names = set(c["check"] for c in results if c["hard"])
+    assert hard_names == {"json_parse", "schema_shape", "host_say_present",
+                          "targets_in_roster", "origin_enum", "active_budget"}, hard_names
+
+
+# ── moderator 协议与代码一致(漂移守卫)────────────────────────
+#
+# 这就是「允许的那半个机械检查」:枚举字面量与字段名两边对齐。
+# 行为层(moderator 真按协议产计划)只能靠 spike runner 活体抽样,CI 不碰。
+
+_PROTOCOL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "protocol", "moderator.md")
+
+
+def _protocol_text():
+    with io.open(_PROTOCOL, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def t_protocol_file_exists():
+    assert os.path.isfile(_PROTOCOL), _PROTOCOL
+
+
+def t_protocol_contains_every_enum_literal():
+    text = _protocol_text()
+    for group in (plan_check.ORIGINS, plan_check.REASONS,
+                  plan_check.CLOSING_TYPES, plan_check.VERDICTS):
+        for literal in group:
+            assert literal in text, "协议正文缺枚举字面量: %s" % literal
+    for field in ("host_say", "rationale", "blind", "prompt",
+                  "transcript_delta", "direction_change"):
+        assert field in text, "协议正文缺字段名: %s" % field
+
+
+def t_moderate_default_and_roster_parse():
+    import moderate
+    assert moderate.DEFAULT_MODERATOR == "codex"
+    tmp = tempfile.mkdtemp()
+    try:
+        missing = os.path.join(tmp, "nope.yaml")
+        assert moderate.parse_moderator_field(missing) is None
+        p1 = os.path.join(tmp, "r1.yaml")
+        with io.open(p1, "w", encoding="utf-8") as fh:
+            fh.write("participants:\n  - agent: codex\n")
+        assert moderate.parse_moderator_field(p1) is None
+        p2 = os.path.join(tmp, "r2.yaml")
+        with io.open(p2, "w", encoding="utf-8") as fh:
+            fh.write("# 注释\nmoderator: dsh\nparticipants:\n  - agent: codex\n")
+        assert moderate.parse_moderator_field(p2) == "dsh"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def t_moderate_rejects_unregistered_moderator():
+    # 只断言「响亮」:显式指了未登记的名字必须出警告。回退落到谁取决于
+    # 本机装了什么(外部状态),这里不碰。
+    import moderate
+    _, warns = moderate.pick_moderator("aider")
+    assert warns and "未在适配库登记" in warns[0], warns
+
+
+def t_moderate_input_roster_filters_unregistered():
+    import moderate
+    text = ("【名册】\n- codex(站位:证据)\n- aider(未登记)\n- dsh\n"
+            "【共识状态头】\n(无)\n")
+    names, dropped = moderate.roster_names_from_input(text)
+    assert names == ["codex", "dsh"], names
+    assert dropped == ["aider"], dropped
+
+
+def t_skill_version_matches_plugin_json():
+    # 版本同步:SKILL.md frontmatter vs .claude-plugin/plugin.json。
+    # ★ 条件跳过(与 README 深度检查同款,同款危险)★:plugin 安装是**拷贝**,
+    # 装出去的目录里没有 ../../../.claude-plugin/ —— 此时这条静默变绿。
+    # 真正的执法者是 CI 的打包冒烟步,这里只是本地开发时的早期预警。
+    here = os.path.dirname(os.path.abspath(__file__))
+    plugin_json = os.path.join(here, "..", "..", "..", ".claude-plugin", "plugin.json")
+    if not os.path.isfile(plugin_json):
+        print("      (跳过:.claude-plugin/plugin.json 不在,由 CI 兜底)")
+        return
+    import json as _json
+    with io.open(plugin_json, encoding="utf-8") as fh:
+        plugin_version = _json.load(fh)["version"]
+    skill_md = os.path.join(here, "..", "SKILL.md")
+    skill_version = None
+    with io.open(skill_md, encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r"^version:\s*(\S+)", line)
+            if m:
+                skill_version = m.group(1)
+                break
+    assert skill_version == plugin_version, (
+        "SKILL.md=%s plugin.json=%s" % (skill_version, plugin_version))
+
+
 def main():
     print("── 超时诊断 ──")
     check("从未开始 → 指向 FIRST_BYTE_GRACE", t_never_started_points_at_grace)
@@ -560,6 +704,22 @@ def main():
     print("── 内省接口 ──")
     check("--list-agents 就是注册表", t_list_agents_prints_every_registered_name)
     check("未登记与未通过是不同退出码", t_precheck_unknown_agent_is_distinct_exit)
+
+    print("── moderator round plan 校验 ──")
+    check("合法计划零失败", t_good_plans_have_no_failures)
+    check("每类违规都被点名", t_bad_plans_each_hit_expected_check)
+    check("围栏与闲话都解得出", t_extract_json_tolerates_fence_and_chatter)
+    check("真实损坏样本必须解析失败", t_extract_json_rejects_real_corruption)
+    check("重试反馈点名失败项", t_retry_feedback_names_failures_and_sentinel)
+    check("hard/soft 边界锁死", t_hard_soft_split_is_stable)
+
+    print("── moderator 协议与代码一致 ──")
+    check("协议文件在位", t_protocol_file_exists)
+    check("枚举与字段名两边对齐", t_protocol_contains_every_enum_literal)
+    check("默认 moderator 与名册解析", t_moderate_default_and_roster_parse)
+    check("未登记的 moderator 响亮拒绝", t_moderate_rejects_unregistered_moderator)
+    check("输入名册过滤未登记者", t_moderate_input_roster_filters_unregistered)
+    check("SKILL 与 plugin 版本同步", t_skill_version_matches_plugin_json)
 
     print()
     if _FAILED:
