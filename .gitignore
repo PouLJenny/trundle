@@ -11,3 +11,6 @@
 # Python
 __pycache__/
 *.py[cod]
+
+# moderator spike 的运行产物(prompt 文件与原始 round plan)
+spike/moderator/out/
