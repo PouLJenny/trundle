@@ -169,7 +169,7 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 |---|---|---|---|
 | `codex` | `--sandbox read-only` | 7–13s | 非 git 目录需 `--skip-git-repo-check` |
 | `gemini` | `--approval-mode plan` | 6–14s | **必须在信任目录**,否则降级到 108–199s |
-| `claude` | 工具白名单 | 13s | 需清 `CLAUDECODE` 避免嵌套 session |
+| `claude` | 工具白名单 | 13–30s | 需清 `CLAUDECODE` 避免嵌套 session |
 | `dsh` | `DSH_PERMISSION_MODE=read-only`(**环境变量,不是 flag**) | 4–35s | **没有事件流**:全程静默,跑完一次性给全文;只受绝对上限约束,且上限单独收紧到 300s |
 
 **列表里只有实测跑通的。** 每一个都验证过:非交互调用、只读模式真的拦得住写入、输出能干净提取。

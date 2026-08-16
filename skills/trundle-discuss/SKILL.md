@@ -24,7 +24,7 @@ Host 只支持 Claude Code。名册里的 `claude` 指作为**参与者**的 cla
 
 1. **用户是参与方,不是审批人。** 不向用户「提交」结论等批准,而是向用户**提问**。
 2. **默认一轮只有 Claude 说话。** 拉人是例外,每次都要有说得出口的理由。
-3. **辅助 agent 全程只读。** codex 走 `--sandbox read-only`,gemini 走 `--approval-mode plan`,dsh 走 `DSH_PERMISSION_MODE=read-only`(它没有只读 flag,只读靠环境变量,而且它的默认值是**可写的**——脚本强制覆盖用户环境,不随环境变量放宽)。永不给写权限。
+3. **辅助 agent 全程只读。** codex 走 `--sandbox read-only`,gemini 走 `--approval-mode plan`,claude 走工具白名单 `--allowedTools Read,Glob,Grep`,dsh 走 `DSH_PERMISSION_MODE=read-only`(它没有只读 flag,只读靠环境变量,而且它的默认值是**可写的**——脚本强制覆盖用户环境,不随环境变量放宽)。永不给写权限。
 4. **产出物是讨论过程。** 除非用户明确要,结尾不生成规格文档、不写"最终方案"。
 5. **子进程无状态。** 每次调用把需要的上下文完整塞进 prompt——它不记得上一轮。
 

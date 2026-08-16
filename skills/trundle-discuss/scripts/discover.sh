@@ -29,6 +29,10 @@ fi
 
 # PATH 里可能出现的其他 agent CLI —— 只用来提示用户"发现了但没登记",
 # 绝不调用。猜错非交互 flag 只是挂掉,猜错只读 flag 会给它写权限。
+#
+# 注意这**不是** agents.yaml 末尾那份「还没适配的」名单的副本,两者不该对齐:
+# 这里是「可能装在机器上、值得提一句」的探测清单,那里是「真的探过、结论是
+# 什么」的记录。这里长、那里短是正常的。
 KNOWN_UNREGISTERED=(opencode cline kiro-cli aider amp droid goose crush q copilot grok kilo continue)
 
 # 必须是真实文件,不能是 shell builtin/alias/function。
