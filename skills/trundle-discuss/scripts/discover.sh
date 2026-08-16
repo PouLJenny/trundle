@@ -12,7 +12,7 @@ AGENTS_YAML="$SCRIPT_DIR/../agents.yaml"
 # 适配库里已登记的 agent。只收实测跑通的——没验证过的条目是负债:
 # 用户选了它、它不工作,体验比"没有这个选项"更差。
 # 与 agents.yaml 保持一致;新增时两处都要改(见 references/adapting-new-cli.md)。
-REGISTERED=(codex gemini claude)
+REGISTERED=(codex gemini claude dsh)
 
 # PATH 里可能出现的其他 agent CLI —— 只用来提示用户"发现了但没登记",
 # 绝不调用。猜错非交互 flag 只是挂掉,猜错只读 flag 会给它写权限。

@@ -6,16 +6,17 @@
 
 完整步骤见 [`skills/trundle-discuss/references/adapting-new-cli.md`](skills/trundle-discuss/references/adapting-new-cli.md)。提 PR 时请附上:
 
-- [ ] 填好的九个字段(命令模板 / 非交互 flag / 只读 flag / 输出提取 / 事件流粒度 / 超时 / 认证 / 诊断命令 / 信任门禁)
+- [ ] 填好的九个字段(命令模板 / 非交互 flag / **只读约束** / 输出提取 / 事件流粒度 / 超时 / 认证 / 诊断命令 / 信任门禁)
 - [ ] `python3 scripts/selftest.py` 通过(它会检查 spec 字段齐全)
 - [ ] **只读验证的实际输出** —— 见下,这一项不能省
 - [ ] **事件流粒度的实际输出**(带时间戳)—— 证明 `progress` 是实测的不是猜的
 - [ ] 一次真实调用的耗时
 - [ ] CLI 版本号
-- [ ] `invoke.py` 里对应的 `AGENTS` 条目和 `parse_<cli>` 函数
-- [ ] 一个不与现有重复的站位(`stance`)
+- [ ] `invoke.py` 里对应的 `AGENTS` 条目和 `parse_<cli>` 函数(**无事件流的 CLI 不写 parse**,改填 `stream: "none"`,并按 `adapting-new-cli.md` 的四路径表改四处)
 
-### 只读 flag 必须实测
+站位(`stance`)不在这个清单里 —— 它是用户的本地偏好,不属于适配库。
+
+### 只读约束必须实测
 
 ```bash
 cd "$(mktemp -d)" && git init -q .
@@ -23,11 +24,15 @@ cd "$(mktemp -d)" && git init -q .
 ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 ```
 
-**文件一旦被创建,这个 `readonly_flags` 就是错的。**
+**文件一旦被创建,这个只读约束就是错的。**
 
-靠猜的只读 flag 不会被合并。这不是不信任贡献者 —— 是这一条错了,用户的代码库就被一个他没预期的 agent 写了。猜错非交互 flag 只是挂掉,猜错这个的代价不对等。
+顺手也验一次 shell 逃逸(`echo hello > f.txt`)—— 文件沙箱和 bash 沙箱常常是两套东西,只验前者会漏。
 
-找不到只读模式的 CLI 仍可登记条目,但 `readonly_flags` 留空、标注待确认,并且**不得进默认阵容**。
+**只读不一定是 flag。** `dsh` 就没有任何 flag,只读靠 `DSH_PERMISSION_MODE=read-only`,而它的默认值恰恰是可写的。这种情况多一条要求:脚本必须**覆盖**用户环境而不是继承 —— 用户环境里碰巧有个宽权限就把只读放宽掉,是不能接受的。所以还要附上覆盖语义那一次验证的输出(故意把环境设成最宽,确认仍然写不进去)。
+
+靠猜的只读约束不会被合并。这不是不信任贡献者 —— 是这一条错了,用户的代码库就被一个他没预期的 agent 写了。猜错非交互 flag 只是挂掉,猜错这个的代价不对等。
+
+找不到只读模式的 CLI 仍可登记条目,但只读字段留空、标注待确认,并且**不得进默认阵容**。
 
 ## 改协议(SKILL.md)要谨慎
 

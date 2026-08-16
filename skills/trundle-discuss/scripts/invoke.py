@@ -78,7 +78,25 @@ IDLE_DEFAULT = 90
 _IDLE_OVERRIDE = envint("DISCUSSION_IDLE", 0) or None
 
 
+def has_stream(run):
+    """这个 agent 的 stdout 是不是事件流。
+
+    不是 = 整个运行期间一个字节都不吐,跑完才一次性给出全文。实测 dsh 就是:
+    一个 1044 字节的回答,首字节和末字节都落在同一个 8.36s 时刻。
+
+    这不只是"解析方式不同"。活动驱动的超时**整套**建立在有事件流的假设上——
+    没有事件流时 last_activity 永远停在启动时刻、got_event 恒为 False,
+    idle 和 GRACE 都退化成"按墙钟误杀",必须整体跳过而不是调大。
+    """
+    return (run.spec or {}).get("stream", "token") != "none"
+
+
 def idle_for(run):
+    # 无事件流的 agent 没有「空闲」这个概念,再大的 idle 也只是把误杀推迟。
+    # 注意它排在 _IDLE_OVERRIDE **之前**:DISCUSSION_IDLE 也不该把它拽回
+    # 空闲判定 —— 否则又多一个「看起来能拧、其实不通电」的开关。
+    if not has_stream(run):
+        return None
     if _IDLE_OVERRIDE:
         return _IDLE_OVERRIDE
     return (run.spec or {}).get("idle", IDLE_DEFAULT)
@@ -88,7 +106,18 @@ GRACE = envint("DISCUSSION_FIRST_BYTE_GRACE", 180)
 # 本脚本必须先于它开枪,否则被 Bash 工具杀掉时,调用方拿不到任何分段输出和
 # 失败分类,整轮结果全丢。留 60s 余量。
 # DISCUSSION_TIMEOUT 是旧变量名,保留为兼容别名而不是静默失效。
-MAXWALL = envint("DISCUSSION_MAX_WALL", envint("DISCUSSION_TIMEOUT", 540))
+_MAXWALL_OVERRIDE = envint("DISCUSSION_MAX_WALL", envint("DISCUSSION_TIMEOUT", 0)) or None
+MAXWALL = _MAXWALL_OVERRIDE or 540
+
+
+def maxwall_for(run):
+    # 墙钟上限也可以按 agent 单独收紧。理由和 idle 恰好相反:有事件流的 agent
+    # 有空闲超时兜底,跑飞了会先被 idle 砍;**无事件流的 agent 中途没有任何信号
+    # 能区分「在想」和「死了」**,墙钟是它唯一的护栏,所以要更保守。
+    # 显式设了 DISCUSSION_MAX_WALL 就全局覆盖(调试用),与 _IDLE_OVERRIDE 同构。
+    if _MAXWALL_OVERRIDE:
+        return _MAXWALL_OVERRIDE
+    return (run.spec or {}).get("max_wall") or MAXWALL
 # 回显限额。/dev/tty 在 Claude Code 的 Bash 工具下不可用(实测 OSError errno 6),
 # 回显只能走 stderr,而 stderr 最终会连同正文一起交给模型 —— 全量回显等于
 # 把正文重复一遍。限额让用户看得到"它真的在写",又不为此付两份 token。
@@ -332,6 +361,27 @@ def build_claude(prompt):
     ]
 
 
+def build_dsh(prompt):
+    # 一次性问答入口只有 --profile headless 这一个,任务是**位置参数**
+    # (help 里除 -h 外没有任何 flag),不读 stdin。
+    # 只读约束不在这里 —— 它没有只读 flag,靠环境变量,见 AGENTS["dsh"]["set_env"]。
+    return ["dsh", "--profile", "headless", prompt]
+
+
+def build_env(spec):
+    """子进程环境。unset 在前、set 在后。
+
+    set 是**覆盖**,不是 setdefault —— 用户环境里若已有
+    DSH_PERMISSION_MODE=workspace-write,"尊重它"等于把「辅助 agent 全程只读」
+    这条铁律交给一个环境变量决定。这条不容协商。
+    """
+    env = os.environ.copy()
+    for key in spec.get("unset_env") or []:
+        env.pop(key, None)
+    env.update(spec.get("set_env") or {})
+    return env
+
+
 # probe:一条**给人在终端里手动跑**的最小调用。agent 卡在启动阶段被判超时时,
 # 会把它印在失败说明里。存在的理由是实测教训:额度耗尽、认证失效这类错误,
 # 在非交互模式下可能一个字都不吐(实测过一次 gemini 配额耗尽,无 TTY 时 100s 内
@@ -343,6 +393,7 @@ AGENTS = {
         "parse": parse_codex,
         "precheck": None,
         "unset_env": [],
+        "stream": "item",           # 工具调用 / 整条消息,无 token delta
         # item 级事件 —— 生成回答期间完全静默,见 idle_for 上方的注释
         "idle": 300,
         "probe": 'codex exec --sandbox read-only "说一句话"',
@@ -350,6 +401,7 @@ AGENTS = {
     "gemini": {
         "build": build_gemini,
         "parse": parse_gemini,
+        "stream": "token",
         "idle": 90,                 # token 级 delta,没动静就是真没动静
         # 未 trust 就不喷,并给补救指引 —— 绝不用环境变量绕过
         "precheck": lambda: None if gemini_is_trusted()
@@ -363,8 +415,41 @@ AGENTS = {
         "precheck": None,
         # 必须清掉 CLAUDECODE,否则子进程认为自己在嵌套 session 里而报错
         "unset_env": ["CLAUDECODE"],
+        "stream": "token",
         "idle": 90,                 # token 级 delta(思考阶段也有 thinking_delta)
         "probe": 'claude -p "说一句话"',
+    },
+    "dsh": {
+        "build": build_dsh,
+        # 没有 parse —— 它没有事件流可解析,走 drain_stdout_text。
+        # 显式写 None 而不是省略:selftest 会断言 stream=="none" 的 spec 必须
+        # 没有 parse,防止后来的人以为能从它的 stdout 里读出进度。
+        "parse": None,
+        "precheck": None,
+        "unset_env": [],
+        # ★ 只读靠环境变量,不是 flag ★
+        # headless profile 的 sandbox 默认值是
+        #   mode: process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+        # —— **默认可写**,不显式改就等于给它写权限。
+        # 实测这个约束比 gemini 的 --approval-mode plan 更硬:read-only 下让它
+        # 建文件被沙箱拒绝(目录里零文件生成);走 bash 逃逸 `echo hello > f.txt`
+        # 得到 "bash: Read-only file system";它尝试自行升级权限时得到
+        # 'sandbox escalation to "workspace-write" requires approval, but no
+        # approval channel is available' —— headless 下没有审批通道,绕不过去。
+        "set_env": {"DSH_PERMISSION_MODE": "read-only"},
+        # ★ 没有事件流 ★ 实测:1044 字节的回答,首字节和末字节都在同一个 8.36s
+        # 时刻到达;讨论级 prompt(读两个文件 + 写 600 字判断)静默 34.6s 后一次性
+        # 吐 2004 字节。全程 stdout 零输出 —— 没有事件、没有 JSON、没有进度信号。
+        # 源码印证(@deepseek-ai/dsh-headless):await agent.whenIdle() 跑到静止,
+        # 然后 io.stdout.write(outcome.text + "\n") 一把写出。
+        "stream": "none",
+        "idle": None,               # 空闲超时对它无意义,见 idle_for
+        # 无流 = 卡死无征兆,墙钟是唯一护栏,所以比全局 540 收紧。
+        # 实测最重的讨论级 prompt 只用 34.6s,300 有约 9 倍余量。
+        "max_wall": 300,
+        # 带上环境变量前缀是刻意的:这条同时是诊断命令和「只读怎么开」的
+        # 唯一一份可复制文档。
+        "probe": 'DSH_PERMISSION_MODE=read-only dsh --profile headless "说一句话"',
     },
 }
 
@@ -398,6 +483,7 @@ class Run(object):
         self.deltas = []            # gemini: token 级增量
         self.messages = []          # codex: 完整 agent_message,取最后一条
         self.final = None           # claude: 末条 result,权威正文
+        self.text = []              # dsh: 无事件流,整个 stdout 就是正文
         self.stderr_lines = []
         self.raw_sample = []        # 事件流采样,只用于限流关键词检测
         self.proc = None
@@ -414,6 +500,11 @@ class Run(object):
         self.done = threading.Event()
 
     def body(self):
+        # 四种来源按 agent 互斥(text 只有无事件流的 agent 会填),这个顺序是道
+        # 保险而不是真的会撞车。text 放最前:对它来说 stdout 就是正文本身,
+        # 没有"更权威的来源"这一说。
+        if self.text:
+            return "".join(self.text)
         if self.final is not None:
             return self.final
         if self.messages:
@@ -421,6 +512,8 @@ class Run(object):
         return "".join(self.deltas)
 
     def size(self):
+        if self.text:
+            return sum(len(t) for t in self.text)
         if self.final is not None:
             return len(self.final)
         return sum(len(m) for m in self.messages) + sum(len(d) for d in self.deltas)
@@ -527,15 +620,35 @@ def drain_stdout(run):
         pass
 
 
+def drain_stdout_text(run):
+    """纯文本 agent 的 stdout:整块就是正文,不解析、不回显、不置 got_event。
+
+    为什么单独一个函数而不是在 drain_stdout 里加分支:JSONL 那条路径要 strip
+    空行、要逐行 json.loads;而纯文本里**空行是段落分隔**,strip 掉正文就变形了。
+    两条路径对"一行"的含义根本不同,混在一起迟早改坏其中一条。
+
+    不往 raw_sample 里塞:那个采样只喂给限流关键词检测,而这里的每一行都是
+    agent 的发言 —— 讨论里聊到 "429" 是很自然的事。dsh 的错误一律走 stderr
+    (`dsh: <code>: <message>`,exit 1),stderr 那一路已经够用。
+    """
+    try:
+        for line in run.proc.stdout:
+            # 对超时判定没有影响(空闲判定已整体跳过),留着是为了不撒谎
+            run.touch()
+            run.text.append(line)
+    except Exception:
+        pass
+
+
 def launch(run):
     prompt = open(run.promptfile, encoding="utf-8", errors="replace").read()
     argv = run.spec["build"](prompt)
-    env = os.environ.copy()
-    for key in run.spec["unset_env"]:
-        env.pop(key, None)
+    env = build_env(run.spec)
     run.started = time.monotonic()
     run.touch()
-    run.progress = "启动中"
+    # 无事件流的 agent 停在「启动中」会撒谎:那个短语在超时诊断里的确切含义是
+    # 「压根没开始」(见 NEVER_STARTED_MSG),而它其实正常在跑,只是一个字都不吐。
+    run.progress = "启动中" if has_stream(run) else "运行中(无进度事件)"
     try:
         run.proc = subprocess.Popen(
             argv,
@@ -557,8 +670,9 @@ def launch(run):
         run.done.set()
         return
 
+    reader = drain_stdout if has_stream(run) else drain_stdout_text
     threads = [
-        threading.Thread(target=drain_stdout, args=(run,), daemon=True),
+        threading.Thread(target=reader, args=(run,), daemon=True),
         threading.Thread(target=drain_stderr, args=(run,), daemon=True),
     ]
     for t in threads:
@@ -625,6 +739,32 @@ STALLED_MSG = """\
 如果最后状态是「发言中」或刚做完一次工具调用,它很可能是被砍在正要说话那一刻——
 调大 DISCUSSION_IDLE 再试。"""
 
+MAXWALL_MSG = """\
+达到 %(limit)ds 绝对上限并中止,可能陷入了工具循环。本轮缺少 %(name)s 的发言。
+调大用 DISCUSSION_MAX_WALL(注意 Bash 工具上限 600s)。"""
+
+# 第三种超时:这个 agent 压根没有事件流。
+# 它不会被空闲超时砍(watch 跳过了),只可能撞墙钟 —— 所以这段文案里唯一能拧的
+# 旋钮必须是 DISCUSSION_MAX_WALL,并且要明说另外两个不通电。
+# 前两种文案的错误方式是「指错旋钮」;这一种的错误方式是「让人以为它卡死了」——
+# 它可能正在正常干活,只是这个 CLI 从头到尾一个字都不吐。
+NO_STREAM_MSG = """\
+达到 %(limit)ds 绝对上限并中止(已等 %(wall).0fs)。本轮缺少 %(name)s 的发言。
+
+%(name)s 没有事件流:整个运行期间 stdout 一个字节都不吐,跑完才一次性给出全文
+(实测一个讨论级 prompt 静默 34.6s 后一把吐 2004 字节)。所以「一直没输出」既不
+代表它卡住了,也不代表它在干活 —— 中途没有任何信号可以区分这两者。
+
+因此它不走空闲判定:**DISCUSSION_IDLE 和 DISCUSSION_FIRST_BYTE_GRACE 对它完全
+无效**,唯一起作用的是绝对上限 DISCUSSION_MAX_WALL(注意 Bash 工具上限 600s,
+本脚本必须先于它开枪)。
+
+如果反复撞上限,更可能是任务太重(让它读了太多文件),而不是上限太短 ——
+把喂给它的 prompt 收窄一般比调大上限有效。想确认它本身是否健康,在终端里
+手动跑一次:
+
+    %(probe)s"""
+
 
 def classify(run):
     if run.status:                      # untrusted / 启动失败,已经定了
@@ -637,20 +777,29 @@ def classify(run):
         run.note = ("被限流,本轮缺席(等了 %.0fs 后中止)。可稍后重试。\n\n%s"
                     % (run.wall, stderr_tail(run, 3)))
         return
-    if run.killed == "idle":
+    if run.killed:
         run.status = "timeout"
-        run.note = (STALLED_MSG if run.got_event else NEVER_STARTED_MSG) % {
-            "limit": idle_for(run) if run.got_event else GRACE,
-            "wall": run.wall,
-            "name": run.name,
-            "progress": run.progress_at_kill or "未知",
-            "probe": probe_cmd(run),
-        }
-        return
-    if run.killed == "maxwall":
-        run.status = "timeout"
-        run.note = ("达到 %ds 绝对上限并中止,可能陷入了工具循环。本轮缺少 %s 的发言。\n"
-                    "调大用 DISCUSSION_MAX_WALL(注意 Bash 工具上限 600s)。" % (MAXWALL, run.name))
+        # 无事件流的 agent 只可能撞墙钟(watch 跳过了空闲判定)。这里仍然先判它:
+        # 哪怕将来有人在 watch 里改出一条 idle 路径,也不会把「调大
+        # DISCUSSION_IDLE」这种对它不通电的建议发出去。
+        if not has_stream(run):
+            run.note = NO_STREAM_MSG % {
+                "limit": maxwall_for(run),
+                "wall": run.wall,
+                "name": run.name,
+                "probe": probe_cmd(run),
+            }
+        elif run.killed == "idle":
+            run.note = (STALLED_MSG if run.got_event else NEVER_STARTED_MSG) % {
+                "limit": idle_for(run) if run.got_event else GRACE,
+                "wall": run.wall,
+                "name": run.name,
+                "progress": run.progress_at_kill or "未知",
+                "probe": probe_cmd(run),
+            }
+        else:
+            run.note = MAXWALL_MSG % {
+                "limit": maxwall_for(run), "name": run.name}
         return
     if run.rc != 0 and is_rate_limited(run):
         run.status = "ratelimited"
@@ -683,7 +832,13 @@ def status_body(runs, silence=False):
         size = r.size()
         if size and (r.echo_capped or not r.echoed):
             note = "%s %s" % (note, human(size))
-        if silence and r.last_activity is not None:
+        if silence and not has_stream(r):
+            # 不显示「静默 N/M」:那个格式读起来是一句倒计时(「快超时了」),而它的
+            # 静默既不携带信息、也不会因此被砍。这里给的是「还在跑」,不是
+            # 「还剩多久」。上限仍然印出来,免得墙钟那一枪显得突然。
+            note = "%s · 已跑 %ds(上限 %ds)" % (
+                note, int(now - r.started), maxwall_for(r))
+        elif silence and r.last_activity is not None:
             quiet = int(now - r.last_activity)
             if quiet >= SILENCE_HINT:
                 note = "%s · 静默 %ds/%ds" % (
@@ -707,8 +862,15 @@ def watch(runs):
         for r in pending:
             if r.proc is None:
                 continue
-            if now - r.started >= MAXWALL:
+            if now - r.started >= maxwall_for(r):
                 r.kill("maxwall")
+                continue
+            # 无事件流的 agent 整轮零输出,「静默」不携带任何信息 —— 对它做空闲
+            # 判定等于纯按墙钟误杀。实测 dsh 一个讨论级 prompt 静默 34.6s,上下文
+            # 更大时破 GRACE(180s) 只是时间问题,而破了之后 got_event 恒为 False,
+            # 会被判成「压根没开始」并建议去拧 FIRST_BYTE_GRACE —— 一个对它完全
+            # 不通电的开关。它只受墙钟约束。
+            if not has_stream(r):
                 continue
             limit = idle_for(r) if r.got_event else GRACE
             if now - r.last_activity >= limit:
@@ -775,6 +937,12 @@ def main(argv):
         if r.echo_buf.strip() and not r.echo_capped:
             emit("%s │ %s" % (r.name, r.echo_buf.strip()))
             r.echo_buf = ""
+        if not has_stream(r) and r.size():
+            # 无事件流的 agent 全程零回显,这里给一行回执,让「它到底有没有干活」
+            # 有个落点 —— 否则用户看到的是十几行「已跑 Ns」然后突然出结果。
+            # 只报体量不报正文:正文这时才到手,回显它既失去「它真的在写」的意义,
+            # 又要为同一段文字付两份 token(stderr 会连同 stdout 一起交给模型)。
+            emit("%s │ 一次性返回 %s(全程无进度事件)" % (r.name, human(r.size())))
         classify(r)
 
     out = sys.stdout

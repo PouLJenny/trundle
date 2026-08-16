@@ -39,7 +39,7 @@ echo
 echo "── 参与者 CLI(至少需要一个)──"
 
 agents_found=0
-for cli in codex gemini claude; do
+for cli in codex gemini claude dsh; do
   if [ "$(type -t "$cli" 2>/dev/null)" = "file" ]; then
     agents_found=$((agents_found + 1))
     ok "$cli"
@@ -47,7 +47,7 @@ for cli in codex gemini claude; do
 done
 
 if [ "$agents_found" -eq 0 ]; then
-  bad "一个 agent CLI 都没装 —— 目前已适配:codex / gemini / claude"
+  bad "一个 agent CLI 都没装 —— 目前已适配:codex / gemini / claude / dsh"
 fi
 
 echo
@@ -75,6 +75,24 @@ if [ "$(type -t gemini 2>/dev/null)" = "file" ]; then
   fi
 else
   ok "未安装 gemini,跳过"
+fi
+
+echo
+echo "── dsh 只读模式 ──"
+
+if [ "$(type -t dsh 2>/dev/null)" = "file" ]; then
+  # dsh 没有只读 flag,只读靠 DSH_PERMISSION_MODE,而它的 headless profile
+  # 默认值是 workspace-write(**默认可写**)。invoke.py 每次调用都强制覆盖成
+  # read-only,所以这里不会失败 —— 这一段只是把"为什么你环境里的设置不生效"
+  # 提前说清楚,免得有人以为是 bug。
+  if [ -n "${DSH_PERMISSION_MODE:-}" ] && [ "$DSH_PERMISSION_MODE" != "read-only" ]; then
+    note "你的环境里 DSH_PERMISSION_MODE=$DSH_PERMISSION_MODE,讨论时会被强制改为 read-only"
+    echo "      辅助 agent 全程只读是铁律,不随环境变量放宽(你手动跑 dsh 不受影响)"
+  else
+    ok "dsh(只读由 DSH_PERMISSION_MODE=read-only 强制)"
+  fi
+else
+  ok "未安装 dsh,跳过"
 fi
 
 echo

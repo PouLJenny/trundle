@@ -17,6 +17,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import invoke  # noqa: E402
@@ -226,10 +227,126 @@ def t_unknown_agent_has_no_spec():
 
 def t_every_agent_spec_is_complete():
     for name, spec in invoke.AGENTS.items():
-        for field in ("build", "parse", "probe"):
+        for field in ("build", "probe", "stream"):
             assert spec.get(field), "%s 缺 %s" % (name, field)
         assert callable(spec["build"]), name
-        assert callable(spec["parse"]), name
+        assert spec["stream"] in ("token", "item", "none"), \
+            "%s: stream=%r" % (name, spec["stream"])
+        if spec["stream"] == "none":
+            # 无事件流的 agent 不该有 parse:写了就说明有人误以为能从它的
+            # stdout 里读出进度。idle 同理 —— 填了就是在暗示空闲超时对它生效。
+            assert spec.get("parse") is None, "%s 无事件流却有 parse" % name
+            assert spec.get("idle") is None, "%s 无事件流却填了 idle" % name
+        else:
+            assert callable(spec["parse"]), name
+
+
+# ── 无事件流的 agent(dsh)────────────────────────────────────
+#
+# 这组锁的是:没有事件流的 agent 不能被拖进「活动驱动」那套判定里。
+# 回归的样子是 —— 它跑超过 GRACE 就被判「压根没开始」,然后建议用户去拧
+# DISCUSSION_FIRST_BYTE_GRACE。那个开关对它不通电,和上面那组修的是同一种病。
+
+def t_no_stream_has_no_idle():
+    assert invoke.has_stream(mkrun("dsh")) is False
+    assert invoke.idle_for(mkrun("dsh")) is None
+    assert invoke.has_stream(mkrun("codex")) is True
+
+
+def t_idle_override_does_not_resurrect_idle():
+    # DISCUSSION_IDLE 是调试旋钮,但它也不该把无流 agent 拽回空闲判定 ——
+    # 那等于凭空造出第四个不通电的开关
+    old = invoke._IDLE_OVERRIDE
+    try:
+        invoke._IDLE_OVERRIDE = 300
+        assert invoke.idle_for(mkrun("dsh")) is None
+        assert invoke.idle_for(mkrun("codex")) == 300
+    finally:
+        invoke._IDLE_OVERRIDE = old
+
+
+def t_no_stream_has_shorter_maxwall():
+    # 无流 = 卡死无征兆,墙钟是唯一护栏,所以要比有流的更保守
+    assert invoke.maxwall_for(mkrun("dsh")) == 300
+    assert invoke.maxwall_for(mkrun("codex")) == invoke.MAXWALL
+
+
+def t_maxwall_override_applies_to_all():
+    # 显式设了 DISCUSSION_MAX_WALL 就是全局的,per-agent 的收紧要让位
+    old = invoke._MAXWALL_OVERRIDE
+    try:
+        invoke._MAXWALL_OVERRIDE = 20
+        assert invoke.maxwall_for(mkrun("dsh")) == 20
+        assert invoke.maxwall_for(mkrun("codex")) == 20
+    finally:
+        invoke._MAXWALL_OVERRIDE = old
+
+
+def t_no_stream_timeout_points_at_maxwall():
+    r = mkrun("dsh", killed="maxwall", wall=300.0,
+              progress_at_kill="运行中(无进度事件)")
+    invoke.classify(r)
+    assert r.status == "timeout", r.status
+    assert "DISCUSSION_MAX_WALL" in r.note, r.note
+    assert "没有事件流" in r.note, r.note
+    # 另外两套文案的哨兵句一个都不许出现
+    assert "调大 DISCUSSION_IDLE 再试" not in r.note, r.note
+    assert "压根没开始" not in r.note, r.note
+    assert invoke.AGENTS["dsh"]["probe"] in r.note, "无流 agent 更依赖手动 probe"
+
+
+def t_no_stream_idle_kill_still_points_at_maxwall():
+    # 防御性:watch 现在不会给它 killed="idle",但万一将来改出这条路径,
+    # 也不能把「拧 DISCUSSION_IDLE」发给它
+    r = mkrun("dsh", killed="idle", got_event=False, wall=200.0)
+    invoke.classify(r)
+    assert "DISCUSSION_MAX_WALL" in r.note, r.note
+    assert "压根没开始" not in r.note, r.note
+
+
+def t_no_stream_body_comes_from_text():
+    r = mkrun("dsh")
+    r.text = ["第一段\n", "\n", "第二段\n"]
+    assert r.body() == "第一段\n\n第二段\n", repr(r.body())
+    # 空行是段落分隔,不能被吞掉 —— 这是纯文本路径和 JSONL 路径的关键差别
+    assert "\n\n" in r.body()
+    r.deltas = ["不该用这个"]
+    assert r.body().startswith("第一段"), "text 优先于 deltas"
+
+
+def t_no_stream_status_line_has_no_countdown():
+    # 状态行不许出现「静默 N/M」:那读起来是倒计时,而它的静默是正常的
+    r = mkrun("dsh", progress="运行中(无进度事件)")
+    r.started = time.monotonic() - 100
+    r.last_activity = r.started
+    line = invoke.status_body([r], silence=True)
+    assert "静默" not in line, line
+    assert "已跑" in line, line
+    assert "300" in line, "上限要可见,否则墙钟那一枪显得突然:%s" % line
+
+
+def t_readonly_env_overrides_user_env():
+    # 只读铁律不能交给用户环境决定:dsh 的 headless profile 默认是
+    # workspace-write,用户环境里若已有这个变量,必须被覆盖而不是被尊重
+    old = os.environ.get("DSH_PERMISSION_MODE")
+    try:
+        os.environ["DSH_PERMISSION_MODE"] = "danger-full-access"
+        env = invoke.build_env(invoke.AGENTS["dsh"])
+        assert env["DSH_PERMISSION_MODE"] == "read-only", \
+            env.get("DSH_PERMISSION_MODE")
+    finally:
+        if old is None:
+            os.environ.pop("DSH_PERMISSION_MODE", None)
+        else:
+            os.environ["DSH_PERMISSION_MODE"] = old
+
+
+def t_dsh_prompt_is_last_positional():
+    # 任务是位置参数且不读 stdin;在 prompt 后面再追加任何东西,都会把它
+    # 变成某个 flag 的参数
+    argv = invoke.build_dsh("你好")
+    assert argv[-1] == "你好", argv
+    assert "--profile" in argv and "headless" in argv, argv
 
 
 def main():
@@ -260,6 +377,18 @@ def main():
     print("── 适配表 ──")
     check("未登记的 agent 没有 spec", t_unknown_agent_has_no_spec)
     check("已登记的 spec 字段齐全", t_every_agent_spec_is_complete)
+
+    print("── 无事件流的 agent ──")
+    check("无流 agent 没有空闲上限", t_no_stream_has_no_idle)
+    check("DISCUSSION_IDLE 也不把它拽回空闲判定", t_idle_override_does_not_resurrect_idle)
+    check("无流 agent 的墙钟单独收紧", t_no_stream_has_shorter_maxwall)
+    check("显式墙钟覆盖对所有 agent 生效", t_maxwall_override_applies_to_all)
+    check("超时 → 指向 DISCUSSION_MAX_WALL", t_no_stream_timeout_points_at_maxwall)
+    check("即便被判 idle 也不指错旋钮", t_no_stream_idle_kill_still_points_at_maxwall)
+    check("正文取整个 stdout,空行不丢", t_no_stream_body_comes_from_text)
+    check("状态行不显示成倒计时", t_no_stream_status_line_has_no_countdown)
+    check("只读强制覆盖用户环境", t_readonly_env_overrides_user_env)
+    check("prompt 是最后一个位置参数", t_dsh_prompt_is_last_positional)
 
     print()
     if _FAILED:
