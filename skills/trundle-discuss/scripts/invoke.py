@@ -30,6 +30,7 @@ status: ok | timeout | untrusted | ratelimited | error
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -331,6 +332,11 @@ def build_claude(prompt):
     ]
 
 
+# probe:一条**给人在终端里手动跑**的最小调用。agent 卡在启动阶段被判超时时,
+# 会把它印在失败说明里。存在的理由是实测教训:额度耗尽、认证失效这类错误,
+# 在非交互模式下可能一个字都不吐(实测过一次 gemini 配额耗尽,无 TTY 时 100s 内
+# stdout 只有 init 和 prompt 回显、stderr 只有一条颜色警告),而同样的调用在终端
+# 里会打出真正的原因。所以不要让用户自己去猜命令怎么写。
 AGENTS = {
     "codex": {
         "build": build_codex,
@@ -339,6 +345,7 @@ AGENTS = {
         "unset_env": [],
         # item 级事件 —— 生成回答期间完全静默,见 idle_for 上方的注释
         "idle": 300,
+        "probe": 'codex exec --sandbox read-only "说一句话"',
     },
     "gemini": {
         "build": build_gemini,
@@ -348,6 +355,7 @@ AGENTS = {
         "precheck": lambda: None if gemini_is_trusted()
         else ("untrusted", UNTRUSTED_MSG % os.getcwd()),
         "unset_env": [],
+        "probe": 'gemini -p "说一句话"',
     },
     "claude": {
         "build": build_claude,
@@ -356,16 +364,24 @@ AGENTS = {
         # 必须清掉 CLAUDECODE,否则子进程认为自己在嵌套 session 里而报错
         "unset_env": ["CLAUDECODE"],
         "idle": 90,                 # token 级 delta(思考阶段也有 thinking_delta)
+        "probe": 'claude -p "说一句话"',
     },
 }
 
 
 # ── 一次调用 ─────────────────────────────────────────────────
 
+# 短语类标记 —— 足够长,不会误命中正文。
+# "exceeded your current quota" 是实测 gemini 配额耗尽时的原话,它不含
+# 连续的 "quota exceeded",单靠后者接不住。
 RATE_MARKERS = (
-    "429", "resource_exhausted", "quota exceeded", "rate limit",
-    "too many requests", "rate_limit_exceeded",
+    "resource_exhausted", "quota exceeded", "quota_exceeded",
+    "exceeded your current quota",
+    "rate limit", "rate_limit_exceeded", "too many requests",
 )
+# 纯数字状态码必须带词边界:裸子串 "429" 会把正文里的 "4290ms"、"重试 4295 次"
+# 判成限流(本项目实测踩过)。\b 让 "4290" 不命中,而 '"status":429' 仍然命中。
+RATE_CODE_RE = re.compile(r"\b429\b")
 
 # codex 每次启动都会喷这条,与失败无关。报错时展示它只会误导排查方向。
 STDERR_NOISE = ("failed to load models cache",)
@@ -567,7 +583,9 @@ def launch(run):
 
 def is_rate_limited(run):
     blob = ("\n".join(run.stderr_lines) + "\n" + "\n".join(run.raw_sample)).lower()
-    return any(m in blob for m in RATE_MARKERS)
+    if any(m in blob for m in RATE_MARKERS):
+        return True
+    return bool(RATE_CODE_RE.search(blob))
 
 
 def stderr_tail(run, n=5):
@@ -576,19 +594,58 @@ def stderr_tail(run, n=5):
     return "\n".join(lines[-n:]) if lines else "(stderr 为空)"
 
 
+def probe_cmd(run):
+    return (run.spec or {}).get("probe") or "%s --help" % run.name
+
+
+# 空闲超时有两种,区别不在措辞,在**该拧哪个旋钮**:
+#   从未开始 → 用的是 GRACE,拧 DISCUSSION_IDLE 完全不起作用
+#   中途卡住 → 用的是 idle_for(run),这时 DISCUSSION_IDLE 才是对的那个
+# 这两种情况一度共用一段文案、一律建议"调大 DISCUSSION_IDLE",于是撞上前一种的人
+# 会对着一个不通电的开关反复试 —— 本项目自己踩过,两次,一共等了 400 秒。
+
+NEVER_STARTED_MSG = """\
+%(wall).0fs 内一个实质事件都没产出,判定卡死并中止。本轮缺少 %(name)s 的发言。
+最后的状态是「%(progress)s」—— 它不是写到一半被砍,是压根没开始。
+
+首字节宽限 %(limit)ds,对应的环境变量是 DISCUSSION_FIRST_BYTE_GRACE。
+**调大 DISCUSSION_IDLE 对这种情况无效** —— 那个参数管的是"开始输出之后的静默"。
+
+卡在启动阶段,常见原因是额度耗尽、认证失效、网络不通。这些错误在非交互模式下
+可能一个字都不吐,想看真实原因就在终端里手动跑一次:
+
+    %(probe)s"""
+
+STALLED_MSG = """\
+连续 %(limit)ds 没有任何事件,判定卡死并中止(已等 %(wall).0fs)。本轮缺少 %(name)s 的发言。
+最后的状态是「%(progress)s」。
+
+注意:静默不一定等于卡死。事件粒度粗的 agent(codex 只有 item 级事件)在生成回答的
+整个过程中不发任何事件,回答越长静默越久。
+如果最后状态是「发言中」或刚做完一次工具调用,它很可能是被砍在正要说话那一刻——
+调大 DISCUSSION_IDLE 再试。"""
+
+
 def classify(run):
     if run.status:                      # untrusted / 启动失败,已经定了
         return
+    # 被超时砍掉的也要先查一遍限流。限流的典型表现恰恰**就是**长时间没有输出,
+    # 而这两个 kill 分支原本直接 return —— 于是 stderr 里明写着 429,报出来
+    # 也只是"卡死",把人引向"调大超时"而不是"等一会儿再来"。
+    if run.killed and is_rate_limited(run):
+        run.status = "ratelimited"
+        run.note = ("被限流,本轮缺席(等了 %.0fs 后中止)。可稍后重试。\n\n%s"
+                    % (run.wall, stderr_tail(run, 3)))
+        return
     if run.killed == "idle":
-        limit = idle_for(run) if run.got_event else GRACE
         run.status = "timeout"
-        run.note = ("连续 %ds 没有任何事件,判定卡死并中止(已等 %.0fs)。本轮缺少 %s 的发言。\n"
-                    "最后的状态是「%s」。\n\n"
-                    "注意:静默不一定等于卡死。事件粒度粗的 agent(codex 只有 item 级事件)"
-                    "在生成回答的整个过程中不发任何事件,回答越长静默越久。\n"
-                    "如果最后状态是「发言中」或刚做完一次工具调用,它很可能是被砍在正要说话那一刻——"
-                    "调大 DISCUSSION_IDLE 再试。"
-                    % (limit, run.wall, run.name, run.progress_at_kill or "未知"))
+        run.note = (STALLED_MSG if run.got_event else NEVER_STARTED_MSG) % {
+            "limit": idle_for(run) if run.got_event else GRACE,
+            "wall": run.wall,
+            "name": run.name,
+            "progress": run.progress_at_kill or "未知",
+            "probe": probe_cmd(run),
+        }
         return
     if run.killed == "maxwall":
         run.status = "timeout"

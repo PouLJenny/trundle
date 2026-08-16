@@ -66,6 +66,7 @@ agents:
     # JSONL 里的 item.type == "error" 常常是无害警告(实测那条
     # "Skill descriptions were shortened" 就是),不能据此判失败
     auth_env: []                      # 复用 ~/.codex 已有登录态
+    probe: codex exec --sandbox read-only "说一句话"   # 卡在启动阶段时印给用户的诊断命令
     trust:
       # codex 要求 cwd 在 git repo 内,否则拒绝启动。
       # 非 repo 目录用该 flag 放行,无副作用(与 gemini 不同)。
@@ -90,6 +91,18 @@ agents:
     progress: token
     idle: 90                          # token 级 delta,没动静就是真没动静
     auth_env: []                      # ~/.gemini/settings.json 已配认证
+    probe: gemini -p "说一句话"        # 卡在启动阶段时,印给用户在终端手动跑的诊断命令
+    # ★ 额度耗尽的表现是「静默挂起」,不是报错 ★
+    #
+    # 免费层额度很小(实测 generate_content_free_tier_requests limit: 5),
+    # 跑几轮讨论就会撞上。耗尽后 gemini **不报错**,而是按 ~61s 间隔内部退避重试。
+    # 实测:无 TTY 时 100s 内 stdout 只有 init 和 prompt 回显、stderr 只有一条
+    # 颜色警告,限流关键词零命中 —— 从事件流里根本认不出来,只会被判成卡死。
+    # 同一时刻同样的调用在终端里会打出 "You exceeded your current quota"。
+    #
+    # 所以:(a) 失败说明必须给出 probe 命令,让用户自己去终端看真实原因;
+    #       (b) classify() 在报 timeout 前先查限流,别让 429 被"卡死"盖掉。
+    # 别指望自动识别这个场景 —— 试过,配额窗口滚动后无法稳定复现。
     trust:
       # ★ 这里是整个适配库最重要的一条,不要图省事 ★
       #
@@ -127,6 +140,7 @@ agents:
     # 必须清掉这个变量,否则子进程认为自己在嵌套 session 里而报错
     env_unset: ["CLAUDECODE"]
     auth_env: []
+    probe: claude -p "说一句话"       # 卡在启动阶段时印给用户的诊断命令
     trust:
       check: none
     stance: |
