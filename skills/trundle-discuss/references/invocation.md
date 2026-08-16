@@ -1,6 +1,6 @@
 # 调用参考
 
-实测环境:codex-cli 0.144.1 / gemini 0.55.1 / claude 2.1.233,2026-08。
+实测环境:codex-cli 0.144.1 / gemini 0.55.1 / claude 2.1.233 / dsh 0.1.0-rc.6,2026-08。
 
 ## invoke.sh 接口
 
@@ -51,7 +51,7 @@ ${CLAUDE_SKILL_DIR}/scripts/invoke.sh codex:/tmp/codex.md gemini:/tmp/gemini.md
 
 ## 各 agent 的精确命令
 
-三家都走 JSONL 事件流。不是为了好看:**没有事件流就没有活动信号,空闲超时无从判起**。
+四家里三家走 JSONL 事件流。不是为了好看:**没有事件流就没有活动信号,空闲超时无从判起**。`dsh` 是例外——它压根没有,代价见下。
 
 ```bash
 # codex —— 非 git 目录才需要 --skip-git-repo-check
@@ -64,6 +64,10 @@ gemini --approval-mode plan -o stream-json -p "<prompt>" </dev/null
 env -u CLAUDECODE claude --allowedTools "Read,Glob,Grep" \
   --output-format stream-json --verbose --include-partial-messages \
   -p "<prompt>" </dev/null
+
+# dsh —— 任务是位置参数,不读 stdin;只读靠环境变量,它没有只读 flag,
+#         而且 headless profile 的默认值是**可写的**
+DSH_PERMISSION_MODE=read-only dsh --profile headless "<prompt>" </dev/null
 ```
 
 事件流形状与正文来源(实测):
@@ -73,6 +77,7 @@ env -u CLAUDECODE claude --allowedTools "Read,Glob,Grep" \
 | codex | **item 级**(`item.started`/`item.completed`,类型有 `command_execution` / `agent_message` / `reasoning` / `web_search`) | 最后一条 `item.completed` 且 `item.type=="agent_message"` 的 `.item.text` |
 | gemini | **token 级** | 拼接所有 `type=="message" && role=="assistant" && delta==true` 的 `.content` |
 | claude | **token 级** + 工具调用事件 | 末条 `type=="result"` 的 `.result` |
+| dsh | **none**——全程零输出,跑完一次性写出全文(实测 1044 字节的回答,首字节和末字节都落在同一个 8.36s 时刻) | 整个 stdout |
 
 ## 依赖:python3,不要 jq
 
@@ -162,6 +167,7 @@ Failed to read prompt from stdin: Resource temporarily unavailable (os error 11)
 |---|---|---|
 | 「启动中」 | 一个**实质**事件都没产出,压根没开始 | `DISCUSSION_FIRST_BYTE_GRACE` |
 | 「发言中」「执行命令 …」「思考中」 | 开始干活了,中途静默超限 | `DISCUSSION_IDLE` |
+| 「运行中(无进度事件)」 | 这个 CLI 从头到尾不吐字,静默不携带任何信息 | `DISCUSSION_MAX_WALL`(另两个对它**完全无效**) |
 
 这个区分不是文档洁癖:本项目自己踩过,两次,一共等了 400 秒。当时两种情况共用一段文案、一律建议「调大 `DISCUSSION_IDLE`」,而实际卡在启动阶段——那个参数对这条路径完全无效。
 
@@ -178,12 +184,24 @@ Failed to read prompt from stdin: Resource temporarily unavailable (os error 11)
 | codex | `item` | **300s** | 只有工具调用和整条消息两种事件,**生成最终回答的全过程一个事件都不发** |
 | gemini | `token` | 90s | delta 持续到达,没动静就是真没动静 |
 | claude | `token` | 90s | 思考阶段也有 `thinking_delta` |
+| dsh | `none` | —— | **没有事件流**,空闲超时对它无意义,整体跳过;只受 `max_wall` 约束 |
 
 实测证据:codex 一次 8.0K 字的回答,生成期间静默约 70s;讨论场景里上下文更大、回答更长时会破 90s。用 90s 卡它,**恰好砍在它要说出正文那一刻**——而日志上看起来像"它卡死了",极易误判成脚本 bug。
 
 codex 没有开启 token 级事件的开关(`codex features list` 里 `apply_patch_streaming_events` 和 `concurrent_reasoning_summaries` 都是 under development,而且都覆盖不到最终回答的生成阶段),所以只能在超时侧让步。上限仍受 `max_wall` 约束。
 
-显式设 `DISCUSSION_IDLE` 会覆盖所有 agent(调试用)。
+显式设 `DISCUSSION_IDLE` 会覆盖所有**有事件流的** agent(调试用)。它拽不回 `dsh`——那会凭空造出第四个不通电的开关。
+
+### 墙钟也可以按 agent 收紧
+
+理由和 IDLE 恰好相反:有事件流的 agent 跑飞了会先被空闲超时砍,墙钟只是兜底;**无事件流的 agent 中途没有任何信号能区分「在想」和「死了」**,墙钟是它唯一的护栏,所以要更保守。
+
+| agent | max_wall | 理由 |
+|---|---|---|
+| codex / gemini / claude | 540s | 有空闲超时兜底 |
+| dsh | **300s** | 无流 = 卡死无征兆。实测最重的讨论级 prompt 只用 34.6s,300 有约 9 倍余量 |
+
+显式设 `DISCUSSION_MAX_WALL` 会覆盖所有 agent(per-agent 的收紧让位)。
 
 ### 静默是可见的
 
@@ -197,6 +215,16 @@ codex 没有开启 token 级事件的开关(`codex features list` 里 `apply_pat
 
 没有这个计时,上面这段看起来就是"codex 卡了 60 秒然后莫名其妙好了"。
 
+**无事件流的 agent 长得不一样**,它显示的是「还在跑」而不是「还剩多久」:
+
+```
+··· 5s  │ dsh ▸ 运行中(无进度事件) · 已跑 5s(上限 300s)  │ codex ▸ 思考中
+··· 16s │ dsh ▸ 运行中(无进度事件) · 已跑 16s(上限 300s) │ codex ▸ 发言中 413字
+··· dsh │ 一次性返回 546字(全程无进度事件)
+```
+
+刻意不用「静默 N/M」那个格式:它读起来是一句倒计时(「快超时了」),而 `dsh` 的静默是正常的,也不会因此被砍。上限仍然印出来,免得墙钟那一枪显得突然。
+
 `timeout` 状态有两种含义,脚本会在正文里写明是哪一种,并附上**开枪那一刻它在干什么**:
 
 ```
@@ -207,7 +235,9 @@ codex 没有开启 token 级事件的开关(`codex features list` 里 `apply_pat
 达到 540s 绝对上限并中止,可能陷入了工具循环。
 ```
 
-正常延迟参考:codex 7–13s(要读文件时 40–150s)、gemini 6–14s、claude 约 13–30s。
+第三种是无事件流的 agent 撞上墙钟,文案里唯一能拧的是 `DISCUSSION_MAX_WALL`,并会明说另外两个不通电——因为对它来说「一直没输出」既不代表卡住,也不代表在干活。
+
+正常延迟参考:codex 7–13s(要读文件时 40–150s)、gemini 6–14s、claude 约 13–30s、dsh 4–35s。
 
 ## 逐字回显
 
@@ -216,3 +246,5 @@ gemini 和 claude 有 token 级 delta,直接回显到终端;codex 只有 item �
 回显优先写 `/dev/tty`——用户在真实终端里手动跑脚本时,这条路径零 token 浪费。**但 Claude Code 的 Bash 工具下没有 tty**(实测 `open("/dev/tty")` 报 `OSError errno 6`),只能降级到 stderr,而 stderr 最终会连同正文一起交给模型,等于正文重复一遍。
 
 所以有 `DISCUSSION_ECHO_CAP`(默认 600 字/agent):回显前 600 字让用户看到"它真的在写",超出后该 agent 转为状态行报体量。想完全关掉回显就设成 1。
+
+**`dsh` 这类无事件流的 agent 不参与回显,`DISCUSSION_ECHO_CAP` 对它不起作用。** 它的正文跑完才到手,那一刻"让用户看到它真的在写"已经没有观众了;而回显走 stderr,等于为同一段文字付两份 token。取而代之是结束时一行回执:`dsh │ 一次性返回 546字(全程无进度事件)`。

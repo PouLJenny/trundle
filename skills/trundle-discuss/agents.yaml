@@ -3,9 +3,17 @@
 # 声明「某个 CLI 怎么调」。用户选了哪些、各自站位是什么,在名册里
 # (~/.claude/trundle-discuss/roster.yaml),不在这个文件——本文件会随 skill 更新被覆盖。
 #
-# 新增一个 agent 要填满八个字段,见 references/adapting-new-cli.md。
+# 新增一个 agent 要填满九个字段,见 references/adapting-new-cli.md。
 # 字段集合来自实测:比"六字段就能覆盖"的初始设想多出 trust(两家主流 CLI
-# 都有信任目录门禁,绕过有真实代价)和 progress(事件流粒度决定超时怎么判)。
+# 都有信任目录门禁,绕过有真实代价)、progress(事件流粒度决定超时怎么判)
+# 和 readonly_env(只读约束不一定是 flag,dsh 就只有环境变量)。
+#
+# ★ 这里没有 stance ★
+# 站位是「讨论里的位置」,不是 CLI 的属性 —— 库作者既不知道用户装了哪些 agent,
+# 也不该替所有场次预定立场。把它写在这里还有第二个坏处:适配库随 skill 更新被
+# 覆盖,而站位是用户偏好,两者生命周期不同,写在一起必然漂(本项目实测漂过:
+# 这里给 codex 写的是「盯实现代价」,用户名册里是「盯证据链」)。
+# 站位现在只存在于名册 ~/.claude/trundle-discuss/roster.yaml,且是可选的。
 
 defaults:
   # 超时不是墙钟,是「吐字间隔」。只要 agent 还在出事件(读文件、思考、吐字)
@@ -28,6 +36,8 @@ defaults:
   #   token —— 有 token 级 delta,空闲超时最灵敏
   #   item  —— 只有阶段性事件(工具调用/整条消息),空闲超时按阶段判
   #   none  —— 没有任何活动信号,只能退化成墙钟。接纳前必须实测,猜不出来
+  #            (dsh 就是这一档,见下 —— 它同时也是墙钟为什么可以按 agent
+  #             单独收紧的理由:无流意味着卡死没有任何征兆)
 
 # ─────────────────────────────────────────────────────────────
 # 所有 agent 通用的调用纪律(踩过的坑,勿删)
@@ -74,9 +84,6 @@ agents:
       bypass_flags: ["--skip-git-repo-check"]
       bypass_safe: true
     latency_observed: "7-13s"
-    stance: |
-      你只盯实现代价和边界情况。具体地问:这个方案要写多少代码、会引入什么状态、
-      什么输入会让它崩。不评价方案好不好听。
 
   gemini:
     verified: true
@@ -119,9 +126,6 @@ agents:
         在该目录下交互式跑一次 gemini 并选择 trust,
         或在 ~/.gemini/trustedFolders.json 里加入 "<dir>": "TRUST_FOLDER"
     latency_observed: "6-14s"
-    stance: |
-      你只盯有没有更简单的做法、是不是解错了问题。
-      如果讨论的前提本身可疑,直接说前提有问题,不要在给定框架内找优化。
 
   claude:
     verified: true
@@ -143,9 +147,56 @@ agents:
     probe: claude -p "说一句话"       # 卡在启动阶段时印给用户的诊断命令
     trust:
       check: none
-    stance: |
-      你只盯这个方案三个月后会变成什么样:谁来维护、加需求时从哪里裂开、
-      有没有把临时决定固化成永久结构。
+    latency_observed: "13-30s"
+
+  dsh:
+    verified: true                    # 实测通过 ①-⑤(@deepseek-ai/dsh 0.1.0-rc.6,2026-08)
+    cmd: dsh --profile headless {prompt}
+    # 唯一的一次性问答入口。任务是**位置参数**,不读 stdin
+    # (help 里除 -h 外没有任何 flag)。
+    noninteractive_flags: ["--profile", "headless"]
+    # ★ 库里第一个「只读不靠 flag」的条目 ★
+    # dsh 没有任何只读 flag。只读靠环境变量:headless profile 的 sandbox mode
+    # 默认是 process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+    # —— **默认可写**,不显式改就等于给它写权限。
+    # 合法取值:read-only | workspace-write | danger-full-access
+    readonly_flags: []
+    readonly_env: {DSH_PERMISSION_MODE: read-only}
+    # 实测只读硬度(比 gemini 的 --approval-mode plan 更硬):
+    #   让它建文件 → 被沙箱拒绝,目录里确认零文件生成
+    #   走 bash 逃逸 `echo hello > f.txt` → bash: Read-only file system
+    #   它尝试自行升级 → sandbox escalation to "workspace-write" requires
+    #     approval, but no approval channel is available
+    #   headless 下没有审批通道,绕不过去。
+    # 注意 invoke.py 是**覆盖**用户环境而不是继承:用户环境里若已有
+    # workspace-write,"尊重它"等于把只读铁律交给一个环境变量决定。
+    # 另有 DSH_TOOLS_MODE(native|code,默认 native)。与只读无关,未验证 code
+    # 模式下的表现,所以不 pin 也不动 —— 记在这里是为了将来出问题有线索。
+    extract: text:stdout              # ★ 库里唯一不是 jsonl 的 ★
+    # ★ progress: none —— 它没有事件流,这是接纳它的全部难点所在 ★
+    # 实测:1044 字节的回答,首字节和最后一字节都在同一个 8.36s 时刻到达;
+    # 全程 stdout 零输出,没有事件、没有 JSON、没有进度信号。
+    # 源码印证(@deepseek-ai/dsh-headless):await agent.whenIdle() 跑到静止,
+    # 然后 io.stdout.write(outcome.text + "\n") 一次性写出。
+    progress: none
+    # idle 留空不是漏填:空闲超时对它**无意义**。它整轮不吐字,再大的 idle 也
+    # 只是把误杀推迟。invoke.py 的 watch() 对 stream=="none" 的 agent 直接跳过
+    # idle/GRACE 判定,超时文案也是单独一套(NO_STREAM_MSG),明说另外两个旋钮
+    # 不通电。详见 references/adapting-new-cli.md 的「没有事件流的 CLI 怎么办」。
+    idle: null
+    # ★ 墙钟比全局 540 收紧 ★ 无流意味着「卡死」和「正常工作」长得一模一样,
+    # 中途没有任何信号能区分,墙钟是它唯一的护栏,所以要更保守。
+    # 实测最重的讨论级 prompt 只用 34.6s,300 有约 9 倍余量。
+    max_wall: 300
+    auth_env: []                      # 复用 dsh 自己的登录态
+    probe: DSH_PERMISSION_MODE=read-only dsh --profile headless "说一句话"
+    trust:
+      check: none
+      # 无 --resume、无会话续接、每次全新 session —— 天然满足「子进程无状态」
+    # TODO 限流表现未实测。is_rate_limited() 的通用标记(rate limit / 429 /
+    # too many requests)碰巧命中就命中。不猜 DeepSeek 的限流原话 —— gemini
+    # 那条 "exceeded your current quota" 是实测来的才敢写。真撞上再补。
+    latency_observed: "4.3s(trivial)/8.4s(300字回答)/28.6-34.6s(读文件+写600字判断)"
 
 # ─────────────────────────────────────────────────────────────
 # 还没适配的
