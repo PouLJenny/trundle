@@ -136,7 +136,9 @@ agents:
       # 在已 trust 的目录里则路由到稳定分支,1 请求 0 失败,6.4s。
       #
       # 所以:绝不 bypass,而是前置检查 + 引导用户 trust。
-      # (那个绕过用的环境变量名故意不写在这里,免得被顺手复制进代码。)
+      # (那个绕过用的环境变量名故意不写在这里,免得被顺手复制进代码。
+      #  全仓库只有 SKILL.md 的铁律里出现过一次,那是为了指名禁止 ——
+      #  主持人 Claude 才是可能被要求去绕过的那一方,它需要认得出来。)
       check: gemini_trusted_folder
       config: ~/.gemini/trustedFolders.json
       bypass_safe: false              # ← 10x 延迟惩罚,不许自动降级
