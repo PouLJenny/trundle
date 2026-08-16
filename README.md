@@ -60,8 +60,8 @@ Claude:codex 不同意我的方案。分歧不在实现,在**要不要做这件�
 ```bash
 git clone https://github.com/PouLJenny/trundle.git
 cd trundle
-./skills/trundle-discuss/scripts/install.sh    # 软链进 ~/.claude/skills/
-./skills/trundle-discuss/scripts/verify.sh     # 自检依赖
+./skills/discuss/scripts/install.sh    # 软链进 ~/.claude/skills/
+./skills/discuss/scripts/verify.sh     # 自检依赖
 ```
 
 **前置依赖**(只有三条)
@@ -93,7 +93,7 @@ cd trundle
 三条路,**都以你点头收尾**(Claude 不会自作主张把你拖进讨论模式):
 
 ```
-/trundle-discuss 订阅计费怎么改      显式命令
+/trundle:discuss 订阅计费怎么改      显式命令
 「叫上 codex 一起聊聊这个」          口头声明
 ```
 
@@ -103,7 +103,7 @@ cd trundle
 
 ### 第一次会让你挑参与者
 
-扫描本机可用的 CLI → 你勾选 → 给每人分一个**整场不变的站位** → 写进 `~/.claude/trundle-discuss/roster.yaml`。之后不再问。
+扫描本机可用的 CLI → 你勾选 → 给每人分一个**整场不变的站位** → 写进 `~/.claude/trundle:discuss/roster.yaml`。之后不再问。
 
 建议 2 人,上限 3 人:并行调用的等待时间取最慢那个,而且人越多越容易互相点头。**两个 agent 不能分到同一站位** —— 重复视角既是伪共识的燃料,又白付一份延迟。
 
@@ -118,7 +118,7 @@ cd trundle
 | 「把 cline 加进来」 | 中途加人 |
 | 「让 gemini 退出」 | 踢出名册 |
 | 「这轮别带 gemini」 | 仅本轮跳过 |
-| `/trundle-discuss agents` | 重新挑参与者 |
+| `/trundle:discuss agents` | 重新挑参与者 |
 | 「退出讨论」「开始写吧」 | 结束 |
 
 **`@` 的原话是原样转达的。** 你可以直接怼某个 agent:
@@ -186,7 +186,7 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 
 `dsh` 就是第三档:它从头到尾一个字都不吐,8.36s 时首字节和末字节同时到达。这一档**不能靠调大超时救**,必须整体跳过空闲判定——否则它一旦跑超过首字节宽限就会被判成"压根没开始",然后请你去拧一个对它不通电的开关。
 
-完整步骤见 [`references/adapting-new-cli.md`](skills/trundle-discuss/references/adapting-new-cli.md)。
+完整步骤见 [`references/adapting-new-cli.md`](skills/discuss/references/adapting-new-cli.md)。
 
 **只读约束必须实测确认,不能猜。** 猜错非交互 flag 只是挂掉;**猜错只读约束会让它拿到写你代码库的权限**。所以扫描到未登记的 CLI 时,本项目只会列出来告诉你,绝不擅自调用。
 
@@ -194,7 +194,7 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 
 ## 隐私与成本
 
-- 讨论记录会落盘到 `<你的项目>/.claude/trundle-discuss/`,含完整讨论内容。仓库自带的 `.gitignore` 已包含它,注意别提交进你自己的仓库
+- 讨论记录会落盘到 `<你的项目>/.claude/trundle:discuss/`,含完整讨论内容。仓库自带的 `.gitignore` 已包含它,注意别提交进你自己的仓库
 - **你的讨论内容会被发送给你选中的每个 CLI 对应的服务商**
 - 每次拉人都是真实的 API 调用,产生真实费用。这也是"默认不拉人"的现实理由之一
 

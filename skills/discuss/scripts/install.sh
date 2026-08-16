@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# trundle-discuss —— 安装
+# trundle discuss —— 安装
 #
 # 只做一件事:把本 skill 软链进 ~/.claude/skills/。
 # 幂等,可重复运行。
@@ -27,4 +27,4 @@ echo
 echo "下一步:"
 echo "  1. 跑 $SKILL_DIR/scripts/verify.sh 自检依赖"
 echo "  2. 重启 Claude Code 会话(skill 不热加载)"
-echo "  3. 用 /trundle-discuss <话题> 开始一场讨论"
+echo "  3. 用 /discuss <话题> 开始一场讨论(plugin 安装则是 /trundle:discuss)"

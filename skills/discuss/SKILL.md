@@ -1,11 +1,11 @@
 ---
-name: trundle-discuss
+name: discuss
 description: >-
   讨论模式:把当前单人对话变成 Claude + codex + gemini 等 CLI agent 的回合制群聊,用户是讨论的参与方而不是审批人。
   当用户在讨论一个需求/方案该怎么做、想听听别的模型怎么看、要在两个以上方案之间权衡,或点名某个 agent 时使用。
   触发词——拟人说法:「叫上 codex」「问问 gemini 怎么看」「@codex」「@gemini」「大家怎么看」「让他们吵一架」
   「听听别的模型的意见」「拉个人进来聊聊」;
-  技术说法:「讨论模式」「/trundle-discuss」「多模型讨论」「交叉验证这个设计」「让 codex 和 gemini 分头论证 A 和 B」
+  技术说法:「讨论模式」「/trundle:discuss」「多模型讨论」「交叉验证这个设计」「让 codex 和 gemini 分头论证 A 和 B」
   「这个方案有没有别的做法」。
   即使用户只是说「这块我不太确定」「我们是不是想复杂了」而当前话题是设计取舍,也应触发——但只用来**提议**进入,不直接进。
   不触发:事实查询、读代码就能确认的问题、已进入写代码/调试的执行阶段、
@@ -14,7 +14,7 @@ version: 0.1.0
 license: Apache-2.0
 ---
 
-# trundle-discuss
+# trundle discuss
 
 把当前对话变成 Claude + 其他 CLI agent 的回合制群聊。**用户是参与方,不是审批人。产出物是讨论过程本身,不是最后那份文档。**
 
@@ -36,9 +36,9 @@ Host 只支持 Claude Code。名册里的 `claude` 指作为**参与者**的 cla
 
 这个模式会改变我的行为(调外部 agent、拒绝直接下结论、把分歧端回去),所以不能隐式进出。
 
-**进入**——三条路,都以用户点头收尾:`/trundle-discuss [话题]`;口头声明(「叫上 codex」);或我识别到设计取舍时**提议**一句「要不要拉 codex 和 gemini 进来讨论?」等用户点头。**第三条是提议,不是自动挡。**
+**进入**——三条路,都以用户点头收尾:`/trundle:discuss [话题]`;口头声明(「叫上 codex」);或我识别到设计取舍时**提议**一句「要不要拉 codex 和 gemini 进来讨论?」等用户点头。**第三条是提议,不是自动挡。**
 
-首次进入时若 `~/.claude/trundle-discuss/roster.yaml` 不存在,先组建阵容(见「名册」)。进入后展示一次控制语法,之后每回合只有状态行:
+首次进入时若 `~/.claude/trundle:discuss/roster.yaml` 不存在,先组建阵容(见「名册」)。进入后展示一次控制语法,之后每回合只有状态行:
 
 ```
 ─── 讨论模式 · codex + gemini · 第 4 轮 · 未决 2 ───
@@ -59,7 +59,7 @@ Host 只支持 Claude Code。名册里的 `claude` 指作为**参与者**的 cla
 让 codex 和 gemini 分头论证 A 和 B   对赌,各给不同任务
 把 cline 加进来 / 让 gemini 退出     中途加人 / 踢人
 这轮别带 gemini                      仅本轮跳过
-/trundle-discuss agents              重新挑参与者
+/trundle:discuss agents              重新挑参与者
 退出讨论 / 开始写吧                  结束
 ```
 
@@ -115,7 +115,7 @@ Host 只支持 Claude Code。名册里的 `claude` 指作为**参与者**的 cla
 
 ## 名册与阵容
 
-三层:**适配库**(`agents.yaml`,某个 CLI 怎么调)→ **名册**(`~/.claude/trundle-discuss/roster.yaml`,用户选了谁 + 站位)→ **本轮阵容**(运行时,按上面三个口子决定谁真发言)。
+三层:**适配库**(`agents.yaml`,某个 CLI 怎么调)→ **名册**(`~/.claude/trundle:discuss/roster.yaml`,用户选了谁 + 站位)→ **本轮阵容**(运行时,按上面三个口子决定谁真发言)。
 
 **站位只在名册里,适配库不预设任何站位。** 站位是「讨论里的位置」,不是 CLI 的属性——库作者既不知道用户装了哪些 agent,也不该替所有场次预定立场;何况适配库随 skill 更新被覆盖,而站位是用户偏好,写在一起必然漂。
 
@@ -127,7 +127,7 @@ Host 只支持 Claude Code。名册里的 `claude` 指作为**参与者**的 cla
 
 ## 状态:transcript + 共识头
 
-transcript **只增不改**,署名原话是指向性反驳的唯一来源。静默 append 到 `<项目>/.claude/trundle-discuss/<date>-<slug>.md`,不向用户宣传、不做总结。
+transcript **只增不改**,署名原话是指向性反驳的唯一来源。静默 append 到 `<项目>/.claude/trundle:discuss/<date>-<slug>.md`,不向用户宣传、不做总结。
 
 喂给子 agent 时头部附**共识状态头**(已确立前提 / 已废弃方向 / 未决问题);正文近两轮全文、更早只留立场行。
 

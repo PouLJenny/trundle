@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# trundle-discuss —— 依赖自检
+# trundle discuss —— 依赖自检
 #
 # 故意不用 set -e:要跑完所有检查再统一报结果。
 

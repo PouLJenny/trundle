@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# trundle-discuss —— 扫描本机可用的 agent CLI
+# trundle discuss —— 扫描本机可用的 agent CLI
 #
 # 只做存在性检查,不调用任何 CLI(可用性验证是选中之后的事)。
 # 输出三段,供 Claude 渲染成选项给用户勾选。

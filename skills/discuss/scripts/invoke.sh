@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# trundle-discuss —— 并行调用参与讨论的 agent
+# trundle discuss —— 并行调用参与讨论的 agent
 #
 # 用法:
 #   invoke.sh codex:/path/to/codex.md gemini:/path/to/gemini.md
@@ -18,7 +18,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 if ! command -v python3 >/dev/null 2>&1; then
   cat >&2 <<'EOF'
-trundle-discuss 需要 python3 (>= 3.8),当前 PATH 里找不到它。
+trundle discuss 需要 python3 (>= 3.8),当前 PATH 里找不到它。
 
   macOS : xcode-select --install   (系统不预装 python3,/usr/bin/python3 只是个跳板)
   Debian/Ubuntu : sudo apt install python3
