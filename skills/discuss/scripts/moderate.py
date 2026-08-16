@@ -46,8 +46,38 @@ import invoke        # noqa: E402  (sibling,同 selftest 的引法)
 import plan_check    # noqa: E402
 
 DEFAULT_MODERATOR = "codex"
-DEFAULT_ROSTER = os.path.expanduser("~/.claude/trundle-discuss/roster.yaml")
 PROTOCOL = os.path.join(HERE, "..", "protocol", "moderator.md")
+
+# 名册的旧路径。engine 本不该认识任何 host 的目录名 —— 这里保留 .claude
+# 只作为**兼容回退**:v1.0 之前的用户名册写在这里,读旧不迁,零迁移成本。
+# 新数据一律走 host 无关的 XDG 路径(见 resolve_roster)。
+LEGACY_ROSTER = "~/.claude/trundle-discuss/roster.yaml"
+
+
+def resolve_roster():
+    """名册路径解析链(每次调用现算,不在 import 时定死 —— 可测):
+
+    1. TRUNDLE_ROSTER 环境变量(显式覆盖,总是赢)
+    2. $XDG_CONFIG_HOME/trundle/roster.yaml(默认 ~/.config/trundle/),存在则用
+    3. 旧路径 ~/.claude/trundle-discuss/roster.yaml,存在则用(兼容回退)
+    4. 都不存在 → 返回新路径(上层按「无名册」处理:moderator 走默认,
+       壳提示首次组阵容;新名册也应写到这里)
+
+    名册和 transcript 是「用户的偏好」和「项目的记忆」,不是某个 host 的
+    私产 —— 换 host 接着聊必须看到同一份,所以是中立路径 + 回退,
+    而不是每个 host 各存一份。
+    """
+    env = os.environ.get("TRUNDLE_ROSTER")
+    if env:
+        return os.path.expanduser(env)
+    config_home = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+    fresh = os.path.join(os.path.expanduser(config_home), "trundle", "roster.yaml")
+    if os.path.isfile(fresh):
+        return fresh
+    legacy = os.path.expanduser(LEGACY_ROSTER)
+    if os.path.isfile(legacy):
+        return legacy
+    return fresh
 
 # 总预算:必须砍在 Bash 工具 600s 上限之前,与 invoke.py 的 540 同哲学。
 # 重试共享同一预算——第二次调用的窗口 = 590 - 已耗,低于下限就不重试。
@@ -179,7 +209,8 @@ def run_round(opts):
     if not roster_names:
         return emit_fail("输入的【名册】块里没有任何已登记的参与者", 2)
 
-    explicit = opts.moderator or parse_moderator_field(opts.roster)
+    roster_path = opts.roster or resolve_roster()
+    explicit = opts.moderator or parse_moderator_field(roster_path)
     moderator, warns = pick_moderator(explicit)
     for w in warns:
         sys.stderr.write("··· %s\n" % w)
@@ -254,7 +285,9 @@ def emit_plan(plan, moderator, retry, wall, soft, outdir):
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="本轮输入文件(五段)")
-    ap.add_argument("--roster", default=DEFAULT_ROSTER)
+    ap.add_argument("--roster", default=None,
+                    help="名册路径;缺省走解析链(TRUNDLE_ROSTER → "
+                         "XDG 新路径 → 旧路径回退)")
     ap.add_argument("--moderator", default=None,
                     help="覆盖名册里的 moderator 字段(调试用)")
     ap.add_argument("--outdir", default=None,

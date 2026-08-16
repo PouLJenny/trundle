@@ -612,6 +612,45 @@ def t_moderate_default_and_roster_parse():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def t_roster_resolution_chain():
+    # 名册路径链:TRUNDLE_ROSTER → XDG 新路径 → 旧路径回退 → 新路径兜底。
+    # HOME/XDG 全部指进临时目录,不碰真实用户数据。
+    import moderate
+    saved = {k: os.environ.get(k)
+             for k in ("TRUNDLE_ROSTER", "XDG_CONFIG_HOME", "HOME")}
+    tmp = tempfile.mkdtemp()
+    try:
+        os.environ["HOME"] = tmp
+        os.environ["XDG_CONFIG_HOME"] = os.path.join(tmp, "xdg")
+        os.environ.pop("TRUNDLE_ROSTER", None)
+
+        fresh = os.path.join(tmp, "xdg", "trundle", "roster.yaml")
+        legacy = os.path.join(tmp, ".claude", "trundle-discuss", "roster.yaml")
+
+        # ① 都不存在 → 兜底返回新路径(上层按「无名册」处理)
+        assert moderate.resolve_roster() == fresh, moderate.resolve_roster()
+        # ② 只有旧路径 → 回退旧路径(老用户零迁移)
+        os.makedirs(os.path.dirname(legacy))
+        with io.open(legacy, "w", encoding="utf-8") as fh:
+            fh.write("moderator: dsh\n")
+        assert moderate.resolve_roster() == legacy
+        # ③ 新路径出现 → 新路径优先于旧
+        os.makedirs(os.path.dirname(fresh))
+        with io.open(fresh, "w", encoding="utf-8") as fh:
+            fh.write("moderator: codex\n")
+        assert moderate.resolve_roster() == fresh
+        # ④ 环境变量总是赢
+        os.environ["TRUNDLE_ROSTER"] = os.path.join(tmp, "elsewhere.yaml")
+        assert moderate.resolve_roster() == os.path.join(tmp, "elsewhere.yaml")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def t_moderate_rejects_unregistered_moderator():
     # 只断言「响亮」:显式指了未登记的名字必须出警告。回退落到谁取决于
     # 本机装了什么(外部状态),这里不碰。
@@ -717,6 +756,7 @@ def main():
     check("协议文件在位", t_protocol_file_exists)
     check("枚举与字段名两边对齐", t_protocol_contains_every_enum_literal)
     check("默认 moderator 与名册解析", t_moderate_default_and_roster_parse)
+    check("名册路径链(env → 新 → 旧回退)", t_roster_resolution_chain)
     check("未登记的 moderator 响亮拒绝", t_moderate_rejects_unregistered_moderator)
     check("输入名册过滤未登记者", t_moderate_input_roster_filters_unregistered)
     check("SKILL 与 plugin 版本同步", t_skill_version_matches_plugin_json)

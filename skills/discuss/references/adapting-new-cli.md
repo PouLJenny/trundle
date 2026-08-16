@@ -31,7 +31,7 @@
 **这里没有 `stance`。** 站位是「讨论里的位置」,不是 CLI 的属性 —— 适配库既不知道
 用户装了哪些 agent,也不该替所有场次预定立场。它还有第二个坏处:适配库随 skill
 更新被覆盖,而站位是用户偏好,两者生命周期不同,写在一起必然漂(本项目实测漂过)。
-站位只存在于名册 `~/.claude/trundle-discuss/roster.yaml`,而且是**可选的**。
+站位只存在于名册 `~/.config/trundle/roster.yaml`(旧路径 `~/.claude/trundle-discuss/` 自动回退),而且是**可选的**。
 
 **只读不一定是 flag。** `dsh` 就没有任何 flag,只读靠 `DSH_PERMISSION_MODE=read-only`,
 而它的默认值恰恰是可写的。无论哪种形式,验证方法不变(见下面的 ②),但环境变量

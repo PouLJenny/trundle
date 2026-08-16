@@ -56,7 +56,7 @@ moderator 缺席时(moderate.py 退出码非 0:没装任何可用 CLI、超预�
 
 **进入**——三条路,都以用户点头收尾:`/trundle:discuss [话题]`(软链安装是 `/discuss`);口头声明(「叫上 codex」);或我识别到设计取舍时**提议**一句「要不要拉 codex 和 gemini 进来讨论?」等用户点头。**第三条是提议,不是自动挡。**
 
-首次进入时若 `~/.claude/trundle-discuss/roster.yaml` 不存在,先组建阵容(见「名册」)。进入后展示一次控制语法,之后每回合只有状态行:
+首次进入时若名册不存在(路径见「名册」的解析链),先组建阵容。进入后展示一次控制语法,之后每回合只有状态行:
 
 ```
 ─── 讨论模式 · codex + gemini · 第 4 轮 · 未决 2 ───
@@ -93,7 +93,9 @@ moderator 缺席时(moderate.py 退出码非 0:没装任何可用 CLI、超预�
 
 ## 名册与阵容
 
-三层:**适配库**(`agents.yaml`,某个 CLI 怎么调)→ **名册**(`~/.claude/trundle-discuss/roster.yaml`,用户选了谁 + 站位)→ **本轮阵容**(运行时,写进本轮输入的【名册】块)。
+三层:**适配库**(`agents.yaml`,某个 CLI 怎么调)→ **名册**(用户选了谁 + 站位)→ **本轮阵容**(运行时,写进本轮输入的【名册】块)。
+
+**名册路径是 host 无关的**,解析链(moderate.py 的 `resolve_roster()` 同一套,壳读写名册也照它走):`TRUNDLE_ROSTER` 环境变量 → `~/.config/trundle/roster.yaml`(XDG,新名册写这里)→ 旧路径 `~/.claude/trundle-discuss/roster.yaml`(存在则回退,老用户零迁移)。名册是用户的偏好,不是某个 host 的私产——换 host 接着用必须是同一份。
 
 **站位只在名册里,适配库不预设任何站位。** 站位是「讨论里的位置」,不是 CLI 的属性——库作者既不知道用户装了哪些 agent,也不该替所有场次预定立场;何况适配库随 skill 更新被覆盖,而站位是用户偏好,写在一起必然漂。
 
@@ -106,7 +108,7 @@ moderator 缺席时(moderate.py 退出码非 0:没装任何可用 CLI、超预�
 
 ## 状态:transcript + 共识头
 
-transcript **只增不改**,署名原话是指向性反驳的唯一来源。静默 append 到 `<项目>/.claude/trundle-discuss/<date>-<slug>.md`,不向用户宣传、不做总结。
+transcript **只增不改**,署名原话是指向性反驳的唯一来源。静默 append,不向用户宣传、不做总结。落盘路径:新讨论写 `<项目>/.trundle/<date>-<slug>.md`;若项目里已有 `.claude/trundle-discuss/`(老项目)则**继续写那里**——transcript 是这个项目的记忆,与哪个 host 记的无关,同一项目的记录绝不因升级或换 host 劈成两份。
 
 共识状态头(已确立前提 / 已废弃方向 / 未决问题)由我维护,每轮写进 moderator 的输入;`fact_verdict` 的裁定结果在下一轮进「已确立的前提」。用户改主意时**不作废**:插一行 `── 方向变更:X → Y(用户,第 N 轮)──`,把废弃前提移进「已废弃方向(不要再论证)」。少了这个,agent 会继续攻击一个已作废的方案。
 
