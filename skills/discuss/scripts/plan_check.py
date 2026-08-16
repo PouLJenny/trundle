@@ -10,7 +10,7 @@ moderator(见 ../protocol/moderator.md)每轮输出一个 JSON round plan,
   soft —— 违反则如实警告,host 看着办;不拦执行
 
 三方共用:moderate.py(运行时)、selftest.py(罐头 fixture 断言)、
-spike/moderator/run_spike.py(活体一致性)。「同一件事只有一处实现」——
+tests/live/run_live.py(活体一致性)。「同一件事只有一处实现」——
 枚举字面量与协议正文的一致性由 selftest 的漂移守卫盯着。
 
 刻意不 import invoke:校验不需要知道 CLI 怎么调;反向依赖会把

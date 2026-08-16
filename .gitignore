@@ -14,5 +14,5 @@
 __pycache__/
 *.py[cod]
 
-# moderator spike 的运行产物(prompt 文件与原始 round plan)
-spike/moderator/out/
+# 活体测试的运行产物(prompt 文件与原始 round plan)
+tests/live/out/
