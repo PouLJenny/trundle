@@ -888,10 +888,55 @@ def watch(runs):
         time.sleep(POLL)
 
 
+# ── 内省接口 ─────────────────────────────────────────────────
+#
+# 给 shell 脚本用的两个只读查询。存在的理由是「同一件事只有一处实现」:
+#
+#   --list-agents  已登记名单。以前 discover.sh 和 verify.sh 各自硬编码一份
+#                  (加上 verify.sh 的提示文案是三份),新增 agent 要人手同步 ——
+#                  漏一处的症状是「装了却不被调用」或「自检说没装」,而且不报错。
+#   --precheck     跑某个 agent 的 precheck。以前 verify.sh 用 grep 管道自己判
+#                  gemini 的信任目录,与 gemini_is_trusted() 实测有六处行为分歧
+#                  (跨行 JSON、根目录、精确相等 vs 含子串、软链、$HOME、损坏
+#                  JSON)。最糟的一个方向是自检报「已信任」而讨论时被跳过 ——
+#                  绿灯自检 + 凭空缺席,最难查。现在只有 Python 那一套实现。
+#
+# 注意:precheck 的结果依赖 os.getcwd()(见 gemini_is_trusted),所以调用方
+# **不能**先 cd 到脚本目录再调,否则判的是脚本目录而不是用户目录。
+
+def cmd_list_agents():
+    for name in AGENTS:
+        sys.stdout.write(name + "\n")
+    return 0
+
+
+def cmd_precheck(name):
+    spec = AGENTS.get(name)
+    if spec is None:
+        sys.stderr.write(UNKNOWN_MSG % name + "\n")
+        return 2
+    precheck = spec["precheck"]
+    verdict = precheck() if precheck else None
+    if not verdict:
+        return 0
+    # 补救指引原样交给调用方 —— 与讨论中缺席时给用户看的是同一段话,
+    # 不再各写各的
+    sys.stdout.write(verdict[1] + "\n")
+    return 1
+
+
 def main(argv):
     if not argv:
         sys.stderr.write("用法: invoke.py <agent>:<提示文件> [...]\n")
         return 1
+
+    if argv[0] == "--list-agents":
+        return cmd_list_agents()
+    if argv[0] == "--precheck":
+        if len(argv) != 2:
+            sys.stderr.write("用法: invoke.py --precheck <agent>\n")
+            return 2
+        return cmd_precheck(argv[1])
 
     runs = []
     for arg in argv:

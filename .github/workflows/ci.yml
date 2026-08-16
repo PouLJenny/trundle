@@ -1,0 +1,58 @@
+name: ci
+
+# 刻意不跑 verify.sh:它在没有任何 agent CLI 的环境里必定失败(scripts/verify.sh
+# 的「一个 agent CLI 都没装」那条 bad)。那是给用户机器用的依赖自检,失败是设计
+# 意图,不该为了进 CI 去把它改软。CI 跑的是 selftest.py —— 它明确不调任何 CLI、
+# 不发网络请求,在 `env -i` 的干净环境里实测退出码 0。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 下限 3.9 而不是 invoke.py 声明的 3.8:3.8 已 EOL,runner 镜像自
+        # 2025-06 起不再预装,actions/setup-python 也已移除它。3.8 仍受支持
+        # 但不在 CI 覆盖内 —— 这一点在 CONTRIBUTING.md 里写明了,不藏着。
+        python: ['3.9', '3.13']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: 自检(纯函数,含 agents.yaml / README 与代码的一致性断言)
+        run: python3 skills/trundle-discuss/scripts/selftest.py
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: shell 语法
+        run: |
+          for f in skills/trundle-discuss/scripts/*.sh; do
+            bash -n "$f" || exit 1
+          done
+
+      - name: python 语法
+        run: python3 -m py_compile skills/trundle-discuss/scripts/*.py
+
+      - name: agents.yaml 能被真正的 YAML 解析器读通
+        # selftest 里那个窄提取器只认两级缩进的简单标量,一个已经损坏的 yaml
+        # 它可能无动于衷。这一步补上那个盲区。
+        # PyYAML 只是 CI 依赖 —— 用户侧仍然零依赖,那条立场没变。
+        run: |
+          pip install --quiet pyyaml
+          python3 -c "import yaml; yaml.safe_load(open('skills/trundle-discuss/agents.yaml'))"
+
+      - name: CONTRIBUTING 里可机器判定的风格约束
+        run: |
+          if grep -rn 'readlink -f' skills/; then
+            echo '::error::解析自身路径要用 `cd ... && pwd -P`,不要用 readlink -f(macOS 上行为不同)'
+            exit 1
+          fi

@@ -17,10 +17,10 @@
     cmd: <命令模板,{flags} 和 {prompt} 会被替换>
     noninteractive_flags: []          # 让它一次性输出、不进 TUI
     readonly_flags: []                # ★ 关键:禁止写入/执行的 flag
-    readonly_env: {}                  # ★ 只读也可能靠环境变量,见下
+    set_env: {}                       # ★ 只读也可能靠环境变量,见下
     extract: jsonl:<哪条事件的哪个字段>  # 正文怎么拿
-    progress: token | item | none     # ★ 事件流粒度,必须实测
-    idle: 90                          # ★ 由 progress 决定,见下
+    stream: token | item | none       # ★ 事件流粒度,必须实测
+    idle: 90                          # ★ 由 stream 决定,见下
     auth_env: []                      # 需要的认证环境变量
     probe: <cli> -p "说一句话"         # ★ 给人在终端手动跑的最小调用,见下
     trust:
@@ -50,18 +50,14 @@
 
 "正文埋在 JSON 字段里要靠 jq 抠"这个顾虑已经不成立——实现是 Python,`json` 在标准库里。
 
-除了 `progress` 字段,还要在 `scripts/invoke.py` 的 `AGENTS` 表里加一条 Spec,并写一个 `parse_<cli>` 函数:吃一条事件,吐 `(进度短语, 要回显的文本)`,正文写进 run 的累加器。照着已有的三个抄。
+除了 `stream` 字段,还要在 `scripts/invoke.py` 的 `AGENTS` 表里加一条 Spec,并写一个 `parse_<cli>` 函数:吃一条事件,吐 `(进度短语, 要回显的文本)`,正文写进 run 的累加器。照着已有的三个抄。
 
-> `AGENTS` 里表达事件流粒度的 key 叫 **`stream`**(取值与本文的 `progress` 完全一致:
-> `token`/`item`/`none`)。之所以不同名,是因为 `run.progress` 在代码里已经是
-> 「状态短语」的意思(`"发言中"`、`"执行命令 …"`),两个 `progress` 会天天打架。
-
-### 没有事件流的 CLI 怎么办(`progress: none`)
+### 没有事件流的 CLI 怎么办(`stream: none`)
 
 `dsh` 是库里第一个这样的例子。把它接进来时改的东西比预想的多,因为**活动驱动的
 超时整套建立在「有事件流」的假设上**,不是换个解析函数就完事:
 
-| 机制 | 有事件流时 | `progress: none` 时 |
+| 机制 | 有事件流时 | `stream: none` 时 |
 |---|---|---|
 | stdout 读取 | `drain_stdout`:逐行 `json.loads` → `parse_<cli>` | `drain_stdout_text`:整块进 `run.text`。**不要写 parse 函数**(spec 里显式填 `None`) |
 | 空闲超时 / 首字节宽限 | `idle_for(run)` / `GRACE` | **整体跳过**。`idle_for()` 返回 `None`,`watch()` 直接 `continue` |
@@ -96,7 +92,7 @@ cd "$(mktemp -d)" && git init -q .
 ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 ```
 
-只读靠环境变量的(如 `dsh`),把 `<readonly_flags>` 换成 `readonly_env` 的前缀,
+只读靠环境变量的(如 `dsh`),把 `<readonly_flags>` 换成 `set_env` 的前缀,
 并**额外**验一次覆盖语义——故意把用户环境设成最宽,确认仍然写不进去:
 
 ```bash
@@ -113,7 +109,7 @@ ls        # 必须零文件生成
 
 确认 `extract` 拿到的是纯正文——不含进度日志、不含统计信息、不含 ANSI 转义、不含任何 JSON 残留。
 
-**④ 事件流粒度(决定 `progress`)**
+**④ 事件流粒度(决定 `stream`)**
 
 ```bash
 <cli> <flags> "分五段详细讲解 bash 的信号处理,每段至少200字" </dev/null \
@@ -129,9 +125,9 @@ ls        # 必须零文件生成
 实测 `dsh` 就是这一档:一个 1044 字节的回答,首字节和末字节都落在同一个 8.36s
 时刻,整个时间戳序列只有一行。
 
-**`progress` 直接决定 `idle` 该填多少**,别照抄 90:
+**`stream` 直接决定 `idle` 该填多少**,别照抄 90:
 
-| progress | idle | 为什么 |
+| stream | idle | 为什么 |
 |---|---|---|
 | `token` | 90 | delta 持续到达,没动静就是真没动静 |
 | `item` | **300** | 生成回答期间通常完全静默,静默时长随回答长度增长 |
@@ -152,7 +148,7 @@ ls        # 必须零文件生成
 - 填好的九字段 + `invoke.py` 里的 `parse_<cli>`(无事件流的 CLI 不写 parse,
   改填 `stream: "none"`,并按「没有事件流的 CLI 怎么办」那一节改四处)
 - **②只读验证的实际输出**(证明文件没被创建;只读靠环境变量的还要附覆盖语义那一次)
-- **④事件流粒度的实际输出**(带时间戳,证明 `progress` 不是猜的)
+- **④事件流粒度的实际输出**(带时间戳,证明 `stream` 不是猜的)
 - 一次真实调用的耗时
 - CLI 版本号
 

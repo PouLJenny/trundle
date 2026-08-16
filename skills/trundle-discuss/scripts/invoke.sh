@@ -14,7 +14,7 @@
 
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 if ! command -v python3 >/dev/null 2>&1; then
   cat >&2 <<'EOF'

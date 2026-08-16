@@ -7,9 +7,9 @@
 完整步骤见 [`skills/trundle-discuss/references/adapting-new-cli.md`](skills/trundle-discuss/references/adapting-new-cli.md)。提 PR 时请附上:
 
 - [ ] 填好的九个字段(命令模板 / 非交互 flag / **只读约束** / 输出提取 / 事件流粒度 / 超时 / 认证 / 诊断命令 / 信任门禁)
-- [ ] `python3 scripts/selftest.py` 通过(它会检查 spec 字段齐全)
+- [ ] `python3 skills/trundle-discuss/scripts/selftest.py` 通过(CI 也跑它;它会检查 spec 字段齐全,以及 agents.yaml / README 与代码一致)
 - [ ] **只读验证的实际输出** —— 见下,这一项不能省
-- [ ] **事件流粒度的实际输出**(带时间戳)—— 证明 `progress` 是实测的不是猜的
+- [ ] **事件流粒度的实际输出**(带时间戳)—— 证明 `stream` 是实测的不是猜的
 - [ ] 一次真实调用的耗时
 - [ ] CLI 版本号
 - [ ] `invoke.py` 里对应的 `AGENTS` 条目和 `parse_<cli>` 函数(**无事件流的 CLI 不写 parse**,改填 `stream: "none"`,并按 `adapting-new-cli.md` 的四路径表改四处)
@@ -47,6 +47,24 @@ ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 ## 提 issue 时
 
 如果是"协议没生效"类的问题(每轮都拉人、给了综合建议、`@` 的话被转述了),请附上那一轮的实际对话片段 —— 这类问题只能靠具体案例判断。
+
+## CI
+
+每次 push 和 PR 都会跑 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。本地一条条复现:
+
+```bash
+python3 skills/trundle-discuss/scripts/selftest.py          # 自检(Python 3.9 / 3.13 各跑一遍)
+for f in skills/trundle-discuss/scripts/*.sh; do bash -n "$f"; done
+python3 -m py_compile skills/trundle-discuss/scripts/*.py
+python3 -c "import yaml; yaml.safe_load(open('skills/trundle-discuss/agents.yaml'))"   # 需要 pyyaml
+! grep -rn 'readlink -f' skills/
+```
+
+两条说明:
+
+- **CI 不跑 `verify.sh`。** 它在没有任何 agent CLI 的环境里必定失败,那是设计意图(用户机器上确实需要至少一个),不该为了进 CI 把它改软。`verify.sh` 是给你本机用的,CI 用的是 `selftest.py` —— 后者明确不调任何 CLI、不发网络请求。
+- **PyYAML 只是 CI 依赖。** 用户侧仍然零依赖,只要 python3 标准库。CI 里多跑一次真正的 YAML 解析,是为了补上 `selftest.py` 里那个窄提取器的盲区 —— 它只认两级缩进的简单标量,一个已经损坏的 yaml 它可能无动于衷。
+- **Python 3.8 受支持但不在 CI 覆盖内。** 它已 EOL,runner 镜像不再预装、`actions/setup-python` 也已移除。`invoke.py` 仍声明 `>= 3.8`,但实际被验证的下限是 3.9。
 
 ## 代码风格
 
