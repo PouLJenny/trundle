@@ -72,9 +72,13 @@
 
 ## 复现
 
+(历史记录:当时 runner 在 `spike/moderator/run_spike.py`,现已改造为
+`tests/live/run_live.py`——默认吃正式协议而非当年的 v0,所以「复现」得到的是
+当前协议的结果,不是本文的历史数字。协议 v0 与当时的 runner 在 git 历史里。)
+
 ```bash
-python3 spike/moderator/run_spike.py                 # 全部 6 case,claude+codex
-python3 spike/moderator/run_spike.py --cases f2,f4 --tag r2   # 稳定性复跑
+python3 tests/live/run_live.py                 # 全部 6 case,claude+codex
+python3 tests/live/run_live.py --cases f2,f4 --tag r2   # 稳定性复跑
 ```
 
-运行产物(prompt 与原始 round plan)在 `out/`,已 gitignore。
+运行产物(prompt 与原始 round plan)在 `tests/live/out/`,已 gitignore。

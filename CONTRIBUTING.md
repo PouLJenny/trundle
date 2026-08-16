@@ -49,7 +49,7 @@ ls SHOULD_NOT_EXIST.txt    # 必须报 No such file
 **行为级改动**(裁量措辞、prompt 骨架)CI 测不了——罐头 fixture 只能验校验器,验不了「moderator 真按协议产计划」。请手动跑活体一致性工具并把输出附在 PR 里:
 
 ```bash
-python3 spike/moderator/run_spike.py --models codex   # 6 个真实回合 case,全绿为准
+python3 tests/live/run_live.py --models codex   # 6 个真实回合 case,全绿为准
 ```
 
 `SKILL.md` 现在是薄壳(进入/退出、机械执行、渲染),改它一般不涉及裁量;若要把裁量散文加回壳里,先读一遍 multi-host 那场讨论的结论——每个 host 一份散文副本正是拆 moderator 要消灭的东西。

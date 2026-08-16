@@ -567,7 +567,7 @@ def t_hard_soft_split_is_stable():
 # ── moderator 协议与代码一致(漂移守卫)────────────────────────
 #
 # 这就是「允许的那半个机械检查」:枚举字面量与字段名两边对齐。
-# 行为层(moderator 真按协议产计划)只能靠 spike runner 活体抽样,CI 不碰。
+# 行为层(moderator 真按协议产计划)只能靠 tests/live/ 的活体 runner 抽样,CI 不碰。
 
 _PROTOCOL = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "protocol", "moderator.md")

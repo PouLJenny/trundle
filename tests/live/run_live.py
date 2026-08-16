@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""moderator 活体一致性 runner(原 spike runner 改造而来)
+"""moderator 活体一致性 runner —— 项目的行为级测试层
 
+两层测试各管一段:CI 里的 selftest 是罐头 fixture,验「校验器认不认得违规」;
+本文件调**真实 CLI**,验「真实模型按当前协议产不产得出与参照一致的计划」。
 对每个 fixture(取自真实 transcript 的真实回合):
   1. 协议(默认:skills/discuss/protocol/moderator.md,即**将要发布的**那份)
      + fixture 输入 → 完整 prompt
   2. 经 invoke.py 并行喂给多个 moderator 模型
   3. 内在契约用 scripts/plan_check.py(与运行时同一份实现);
-     参照比对(「host Claude 当时实际怎么做」)是实验专属断言,留在本文件
+     参照比对(「host Claude 当时实际怎么做」)是测试专属断言,留在本文件
 
-CI 不跑它(要调真 CLI);改协议或校验器后手动跑,附在 PR 里。
-spike 的裁决记录见 results.md;协议 v0 在 git 历史(feat/moderator-v1 首个 commit)。
+CI 不跑它(要调真 CLI);改协议或校验器后手动跑,附在 PR 里(CONTRIBUTING
+有此要求)。前身是 moderator spike 的 runner,裁决记录见 spike-results.md;
+协议 v0 与当时的 runner 在 git 历史里。
 
 用法:
-  python3 run_spike.py [--models claude,codex] [--cases f1,f3] [--protocol PATH]
-                       [--outdir DIR] [--tag N]
+  python3 run_live.py [--models claude,codex] [--cases f1,f3] [--protocol PATH]
+                      [--outdir DIR] [--tag N]
 
 退出码:0 = 全部断言通过;1 = 有失败;2 = 基建错误。
 """

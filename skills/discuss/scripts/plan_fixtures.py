@@ -8,7 +8,7 @@ BAD_PLANS 每条必须命中指定的 check。全部是罐头 JSON,不调任何 
 CORRUPTED_RAW 是**真实样本**,不是合成的:spike 第一轮里 claude-moderator
 在 f4 复跑时产出的损坏 JSON(closing 对象少一个 `}`,consensus 与
 transcript_delta 被嵌进 closing,末尾大括号不配平)。14 次调用出 1 次。
-spike/moderator/out/ 被 gitignore,这里是它唯一的持久化落点——
+tests/live/out/ 被 gitignore,这里是它唯一的持久化落点——
 它证明 extract_json 的三级容忍接不住结构性损坏,重试路径必须存在。
 """
 
