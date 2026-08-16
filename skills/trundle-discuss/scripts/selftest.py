@@ -13,7 +13,9 @@
 那段注释),assert 够用。
 """
 
+import io
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -180,8 +182,10 @@ def t_success_mentioning_429_still_ok():
 def t_trusted_folder_multiline_json():
     """跨行 JSON 也要认。
 
-    这条同时是个基线:verify.sh 用 grep 管道判同一件事,跨行时会得出相反结论。
-    统一两处实现之后,这条用例应该扩到 verify.sh 上。
+    verify.sh 曾经用 grep 管道判同一件事,跨行时得出相反结论(还有另外五处
+    分歧:根目录、精确相等 vs 含子串、软链、$HOME、损坏 JSON)。那份实现已经
+    删掉,verify.sh 现在转调 invoke.py --precheck —— 也就是这个函数。所以这条
+    用例现在同时守着两边。
     """
     tmp = os.path.realpath(tempfile.mkdtemp())     # macOS 上 /var 是软链,必须解
     proj = os.path.join(tmp, "proj")
@@ -341,6 +345,163 @@ def t_readonly_env_overrides_user_env():
             os.environ["DSH_PERMISSION_MODE"] = old
 
 
+# ── 文档与代码一致(agents.yaml / README)────────────────────
+#
+# agents.yaml 没有任何代码读它 —— 真值是 invoke.py 的 AGENTS,因为那里的
+# build/parse/precheck 是 Python 函数对象,YAML 表达不了。所以这个文件是
+# **文档**,而文档会漂:本项目实测漂过两次(stance 两处对不上、README 的
+# claude 延迟与另外两处对不上)。
+#
+# 这组用例是那份文档唯一的看守。它不追求覆盖全部字段 —— 只锁最容易漏且
+# 漏了最要命的:名单本身,以及三个决定超时行为的标量。
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+AGENTS_YAML = os.path.join(_HERE, "..", "agents.yaml")
+README = os.path.join(_HERE, "..", "..", "..", "README.md")
+
+
+def _scalar(raw):
+    if raw == "null":
+        return None
+    if re.match(r"^-?\d+$", raw):
+        return int(raw)
+    return raw.strip("\"'")
+
+
+def _yaml_agents(path=AGENTS_YAML):
+    """从 agents.yaml 的 agents: 块里抽出 {名字: {标量字段}}。
+
+    刻意只认两级缩进的简单形状 —— 它不是 YAML 解析器,也不打算成为。要回答的
+    问题只有一个:文档里登记的名单和几个标量,跟代码里的 AGENTS 对不对得上。
+
+    值里带冒号/引号/中文的字段(cmd / extract / probe / latency_observed)
+    一概不碰 —— 那些正是会绊倒正则的地方,而它们也不值得用正则去赌。
+    同理,`|` 块标量、行内 flow map、trust 子块都在更深的缩进层,天然被滤掉。
+
+    形状一旦变化就什么都抽不出来,而 t_yaml_extractor_found_something 会因此
+    变红 —— 宁可红,也不要静默地什么都没校验完还报绿。
+    """
+    out = {}
+    cur = None
+    in_agents = False
+    with open(path, encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if re.match(r"^\S", line):              # 回到顶层 key
+                in_agents = line.startswith("agents:")
+                cur = None
+                continue
+            if not in_agents:
+                continue
+            m = re.match(r"^  ([A-Za-z][\w-]*):\s*$", line)      # 二级 = agent 名
+            if m:
+                cur = m.group(1)
+                out[cur] = {}
+                continue
+            if cur is None:
+                continue
+            m = re.match(r"^    (stream|idle|max_wall):\s*([^\s#]+)", line)
+            if m:
+                out[cur][m.group(1)] = _scalar(m.group(2))
+    return out
+
+
+def _readme_agents(path=README):
+    """README「支持的 agent CLI」表首列的名字集合。
+
+    锚定到那一节再抓,不全文扫 —— README 里另有两张表(@ 语法、斜杠命令)
+    的首列也是反引号包起来的,全文扫会把 `@codex <你的话>` 之类一起抓进来。
+    """
+    names = set()
+    inside = False
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("## "):
+                inside = line.startswith("## 支持的 agent CLI")
+                continue
+            if not inside:
+                continue
+            m = re.match(r"^\|\s*`([a-z][\w-]*)`\s*\|", line)
+            if m:
+                names.add(m.group(1))
+    return names
+
+
+def t_yaml_extractor_found_something():
+    # 这条是下面两条的地基:提取器静默返回 {} 的话,它们会全部空转还报绿
+    got = _yaml_agents()
+    assert len(got) >= 4, "只抽到 %d 个 agent,提取器多半跟 yaml 的形状脱节了" % len(got)
+    for name, fields in got.items():
+        assert "stream" in fields, "%s 没抽到 stream" % name
+
+
+def t_yaml_agent_names_match_code():
+    assert set(_yaml_agents()) == set(invoke.AGENTS), \
+        "agents.yaml 与 AGENTS 名单不一致:yaml=%s code=%s" % (
+            sorted(_yaml_agents()), sorted(invoke.AGENTS))
+
+
+def t_yaml_scalars_match_code():
+    got = _yaml_agents()
+    for name, spec in invoke.AGENTS.items():
+        doc = got.get(name, {})
+        for field in ("stream", "idle", "max_wall"):
+            assert doc.get(field) == spec.get(field), \
+                "%s.%s: agents.yaml=%r 但代码是 %r" % (
+                    name, field, doc.get(field), spec.get(field))
+
+
+def t_readme_lists_every_agent():
+    # README.md 不在 skill 目录里。skill 被单独拷出来用时它就不存在 —— 那是
+    # 确定性的结构事实,不是本文件开头反对的那种"时灵时不灵"的外部状态。
+    # CI 里 README 一定在,所以这条约束真正由 CI 兜住。
+    if not os.path.isfile(README):
+        print("      (README.md 不在,跳过 —— skill 被单独拷出来用了)")
+        return
+    assert _readme_agents() == set(invoke.AGENTS), \
+        "README 支持表与 AGENTS 不一致:readme=%s code=%s" % (
+            sorted(_readme_agents()), sorted(invoke.AGENTS))
+
+
+# ── 内省接口(给 shell 脚本用)──────────────────────────────
+
+class _Capture(object):
+    """把 cmd_* 写的东西收起来,别混进自检输出。"""
+
+    def __init__(self):
+        self.out = io.StringIO()
+        self.err = io.StringIO()
+
+    def __enter__(self):
+        self._o, self._e = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = self.out, self.err
+        return self
+
+    def __exit__(self, *exc):
+        sys.stdout, sys.stderr = self._o, self._e
+        return False
+
+
+def t_list_agents_prints_every_registered_name():
+    # discover.sh 和 verify.sh 的名单都从这里派生 —— 它少一行,那两处一起少
+    with _Capture() as cap:
+        rc = invoke.cmd_list_agents()
+    assert rc == 0, rc
+    assert cap.out.getvalue().split() == list(invoke.AGENTS), cap.out.getvalue()
+
+
+def t_precheck_unknown_agent_is_distinct_exit():
+    # 未登记要和「登记了但没通过」区分开:前者是用户打错名字,后者是环境问题,
+    # 两种的下一步动作完全不同。verify.sh 只把后者显示成提醒。
+    with _Capture() as cap:
+        assert invoke.cmd_precheck("aider") == 2
+        assert invoke.cmd_precheck("codex") == 0      # codex 没有 precheck
+    assert "未知 agent" in cap.err.getvalue()
+    assert cap.out.getvalue() == "", "未登记的提示不该走 stdout —— 那是给调用方解析的"
+
+
 def t_dsh_prompt_is_last_positional():
     # 任务是位置参数且不读 stdin;在 prompt 后面再追加任何东西,都会把它
     # 变成某个 flag 的参数
@@ -389,6 +550,16 @@ def main():
     check("状态行不显示成倒计时", t_no_stream_status_line_has_no_countdown)
     check("只读强制覆盖用户环境", t_readonly_env_overrides_user_env)
     check("prompt 是最后一个位置参数", t_dsh_prompt_is_last_positional)
+
+    print("── 文档与代码一致 ──")
+    check("提取器真的抽到东西了", t_yaml_extractor_found_something)
+    check("agents.yaml 名单与代码一致", t_yaml_agent_names_match_code)
+    check("agents.yaml 标量与代码一致", t_yaml_scalars_match_code)
+    check("README 支持表列全了", t_readme_lists_every_agent)
+
+    print("── 内省接口 ──")
+    check("--list-agents 就是注册表", t_list_agents_prints_every_registered_name)
+    check("未登记与未通过是不同退出码", t_precheck_unknown_agent_is_distinct_exit)
 
     print()
     if _FAILED:

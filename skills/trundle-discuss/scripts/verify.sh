@@ -6,7 +6,6 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 fail=0
 warn=0
 
@@ -38,44 +37,54 @@ command -v git >/dev/null 2>&1 && ok "git" || note "git 缺失 —— codex 的 
 echo
 echo "── 参与者 CLI(至少需要一个)──"
 
+# 名单从 invoke.py 的 AGENTS 派生,不在这里再抄一份。以前这个文件里有两份
+# (循环一份、下面的提示文案一份)、discover.sh 里还有第三份 —— 新增 agent
+# 要人手同步三处,漏一处的症状是「装了却不被调用」或「自检说没装」,不报错。
+# 不用 mapfile:macOS 自带的 bash 3.2 没有它。
+REGISTERED=()
+while IFS= read -r a; do
+  [ -n "$a" ] && REGISTERED+=("$a")
+done < <(python3 "$SCRIPT_DIR/invoke.py" --list-agents 2>/dev/null)
+
+if [ "${#REGISTERED[@]}" -eq 0 ]; then
+  bad "取不到已适配名单(invoke.py --list-agents 没有输出)"
+fi
+
 agents_found=0
-for cli in codex gemini claude dsh; do
+for cli in "${REGISTERED[@]}"; do
   if [ "$(type -t "$cli" 2>/dev/null)" = "file" ]; then
     agents_found=$((agents_found + 1))
     ok "$cli"
   fi
 done
 
-if [ "$agents_found" -eq 0 ]; then
-  bad "一个 agent CLI 都没装 —— 目前已适配:codex / gemini / claude / dsh"
+if [ "$agents_found" -eq 0 ] && [ "${#REGISTERED[@]}" -gt 0 ]; then
+  bad "一个 agent CLI 都没装 —— 目前已适配:$(printf '%s / ' "${REGISTERED[@]}" | sed 's, / $,,')"
 fi
 
 echo
-echo "── gemini 信任目录 ──"
+echo "── agent 前置检查(信任目录等)──"
 
-if [ "$(type -t gemini 2>/dev/null)" = "file" ]; then
-  cfg="$HOME/.gemini/trustedFolders.json"
-  trusted=0
-  if [ -f "$cfg" ]; then
-    dir="$PWD"
-    while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-      if { grep -F "\"$dir\"" "$cfg" | grep -q 'TRUST_FOLDER'; } 2>/dev/null; then
-        trusted=1; break
-      fi
-      dir="$(dirname "$dir")"
-    done
-  fi
-  if [ "$trusted" -eq 1 ]; then
-    ok "当前目录已被信任($dir)"
+# 这一段以前是 gemini 专属的,自己用 grep 管道判信任目录。那份实现与
+# invoke.py 的 gemini_is_trusted() 实测有六处行为分歧:跨行 JSON、根目录 /
+# 是否被检查、值是精确相等还是含子串、$PWD vs 解过软链的 getcwd、$HOME vs
+# expanduser、损坏 JSON 怎么算。最糟的一个方向是自检报「已信任」而讨论时
+# gemini 被跳过 —— 绿灯自检加凭空缺席,最难查。
+#
+# 现在转调 invoke.py --precheck,只有 Python 那一套实现,而且对所有 agent
+# 通用(precheck 本来就是 AGENTS 里的通用钩子),不必为每个有门禁的 agent
+# 在这里再加一段。
+#
+# ★ 不要先 cd ★ precheck 判的是「当前目录」,cd 到脚本目录再调就判错对象了。
+for cli in ${REGISTERED[@]+"${REGISTERED[@]}"}; do
+  [ "$(type -t "$cli" 2>/dev/null)" = "file" ] || continue
+  if out="$(python3 "$SCRIPT_DIR/invoke.py" --precheck "$cli" 2>/dev/null)"; then
+    ok "$cli"
   else
-    note "当前目录未被 gemini 信任 —— gemini 会跳过发言"
-    echo "      补救:在该目录交互式跑一次 gemini 并选择信任,或在"
-    echo "      $cfg 中加入  \"$PWD\": \"TRUST_FOLDER\""
-    echo "      不要用环境变量绕过:那会把模型路由降级,延迟涨约 10 倍"
+    note "$cli 前置检查未通过 —— 讨论时它会被跳过"
+    printf '%s\n' "$out" | sed 's/^/      /'
   fi
-else
-  ok "未安装 gemini,跳过"
-fi
+done
 
 echo
 echo "── dsh 只读模式 ──"

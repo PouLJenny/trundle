@@ -179,7 +179,7 @@ Failed to read prompt from stdin: Resource temporarily unavailable (os error 11)
 
 一个全局 IDLE 是错的,这是实测踩出来的:
 
-| agent | progress | idle | 理由 |
+| agent | stream | idle | 理由 |
 |---|---|---|---|
 | codex | `item` | **300s** | 只有工具调用和整条消息两种事件,**生成最终回答的全过程一个事件都不发** |
 | gemini | `token` | 90s | delta 持续到达,没动静就是真没动静 |

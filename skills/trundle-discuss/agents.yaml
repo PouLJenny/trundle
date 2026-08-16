@@ -5,8 +5,8 @@
 #
 # 新增一个 agent 要填满九个字段,见 references/adapting-new-cli.md。
 # 字段集合来自实测:比"六字段就能覆盖"的初始设想多出 trust(两家主流 CLI
-# 都有信任目录门禁,绕过有真实代价)、progress(事件流粒度决定超时怎么判)
-# 和 readonly_env(只读约束不一定是 flag,dsh 就只有环境变量)。
+# 都有信任目录门禁,绕过有真实代价)、stream(事件流粒度决定超时怎么判)
+# 和 set_env(只读约束不一定是 flag,dsh 就只有环境变量)。
 #
 # ★ 这里没有 stance ★
 # 站位是「讨论里的位置」,不是 CLI 的属性 —— 库作者既不知道用户装了哪些 agent,
@@ -19,7 +19,7 @@ defaults:
   # 超时不是墙钟,是「吐字间隔」。只要 agent 还在出事件(读文件、思考、吐字)
   # 就一直等 —— 固定墙钟会在 agent 明明干得好好的时候把它砍掉。
   #
-  # ★ idle 必须按 progress 粒度分别定,不能用一个全局值 ★
+  # ★ idle 必须按 stream 粒度分别定,不能用一个全局值 ★
   # 实测教训:codex 只有 item 级事件,**生成最终回答的全过程一个事件都不发**。
   # 实测一次 8.0K 字的回答静默了约 70s,上下文更大时轻松破 90s ——
   # 用 90s 卡它,恰好砍在它要说出正文那一刻,而日志上看起来像"它卡死了"。
@@ -32,7 +32,7 @@ defaults:
   max_wall: 540
   parallel: true        # 多 agent 各一个 reader 线程,总耗时取 max 而非 sum
 
-  # progress 取值,决定超时怎么判:
+  # stream 取值,决定超时怎么判:
   #   token —— 有 token 级 delta,空闲超时最灵敏
   #   item  —— 只有阶段性事件(工具调用/整条消息),空闲超时按阶段判
   #   none  —— 没有任何活动信号,只能退化成墙钟。接纳前必须实测,猜不出来
@@ -54,6 +54,24 @@ invocation_rules:
   # 硬编码等于给自己埋一颗定时炸弹。留空走各 CLI 的默认路由。
   pin_model: false
 
+# ─────────────────────────────────────────────────────────────
+# ★ 这个文件是文档,不是配置 ★
+#
+# 没有任何代码读它。真值是 scripts/invoke.py 的 AGENTS 字典 —— 因为那里的
+# build / parse / precheck 是 Python 函数对象,YAML 表达不了,所以「让代码读
+# yaml」这条路在这个项目里天然走不通。
+#
+# 但它也不是随便写写:selftest.py 会断言这里的名单、stream、idle、max_wall
+# 与 AGENTS 一致,对不上就红。改代码不改这里,CI 会拦住。
+#
+# 下面几对字段名两边不同,那是**声明式描述 vs 实现**,不是待统一的重名,
+# 不要去「修」它们:
+#   cmd + noninteractive_flags + readonly_flags  ←→  build(返回 argv 的函数)
+#   extract                                      ←→  parse + Run.body() 优先级
+#   trust.check                                  ←→  precheck
+#   defaults.first_byte_grace / idle / max_wall  ←→  GRACE / IDLE_DEFAULT / MAXWALL
+# 真正同名同义的是:stream、idle、max_wall、probe、unset_env、set_env。
+# ─────────────────────────────────────────────────────────────
 agents:
 
   codex:
@@ -66,7 +84,7 @@ agents:
     # item.completed 且 item.type == agent_message 的 .item.text ——
     # 与官方 -o/--output-last-message 同义,但少一个临时文件。
     extract: jsonl:item.completed/agent_message
-    progress: item                    # 事件粒度:工具调用 / 整条消息,无 token delta
+    stream: item                      # 事件粒度:工具调用 / 整条消息,无 token delta
     # ★ 300 不是 90 ★ item 级粒度意味着生成回答期间完全静默。
     # 实测:一次 8.0K 字的回答静默约 70s;讨论场景上下文更大时会破 90s。
     # codex 没有开启 token 级事件的开关(features list 里 apply_patch_streaming_events
@@ -95,7 +113,7 @@ agents:
     # (不用一次性的 --output-format json:那样正文埋在 .response 里,而且
     #  整轮零活动信号,空闲超时无从判起。)
     extract: jsonl:message/assistant/delta
-    progress: token
+    stream: token
     idle: 90                          # token 级 delta,没动静就是真没动静
     auth_env: []                      # ~/.gemini/settings.json 已配认证
     probe: gemini -p "说一句话"        # 卡在启动阶段时,印给用户在终端手动跑的诊断命令
@@ -139,10 +157,10 @@ agents:
     noninteractive_flags: []
     readonly_flags: ["--allowedTools", "Read,Glob,Grep"]   # 白名单里没有写工具
     extract: jsonl:result           # 正文取末条 type==result 的 .result,权威且已去重
-    progress: token
+    stream: token
     idle: 90                        # 思考阶段也有 thinking_delta,不会假性静默
     # 必须清掉这个变量,否则子进程认为自己在嵌套 session 里而报错
-    env_unset: ["CLAUDECODE"]
+    unset_env: ["CLAUDECODE"]
     auth_env: []
     probe: claude -p "说一句话"       # 卡在启动阶段时印给用户的诊断命令
     trust:
@@ -161,7 +179,7 @@ agents:
     # —— **默认可写**,不显式改就等于给它写权限。
     # 合法取值:read-only | workspace-write | danger-full-access
     readonly_flags: []
-    readonly_env: {DSH_PERMISSION_MODE: read-only}
+    set_env: {DSH_PERMISSION_MODE: read-only}
     # 实测只读硬度(比 gemini 的 --approval-mode plan 更硬):
     #   让它建文件 → 被沙箱拒绝,目录里确认零文件生成
     #   走 bash 逃逸 `echo hello > f.txt` → bash: Read-only file system
@@ -173,12 +191,12 @@ agents:
     # 另有 DSH_TOOLS_MODE(native|code,默认 native)。与只读无关,未验证 code
     # 模式下的表现,所以不 pin 也不动 —— 记在这里是为了将来出问题有线索。
     extract: text:stdout              # ★ 库里唯一不是 jsonl 的 ★
-    # ★ progress: none —— 它没有事件流,这是接纳它的全部难点所在 ★
+    # ★ stream: none —— 它没有事件流,这是接纳它的全部难点所在 ★
     # 实测:1044 字节的回答,首字节和最后一字节都在同一个 8.36s 时刻到达;
     # 全程 stdout 零输出,没有事件、没有 JSON、没有进度信号。
     # 源码印证(@deepseek-ai/dsh-headless):await agent.whenIdle() 跑到静止,
     # 然后 io.stdout.write(outcome.text + "\n") 一次性写出。
-    progress: none
+    stream: none
     # idle 留空不是漏填:空闲超时对它**无意义**。它整轮不吐字,再大的 idle 也
     # 只是把误杀推迟。invoke.py 的 watch() 对 stream=="none" 的 agent 直接跳过
     # idle/GRACE 判定,超时文案也是单独一套(NO_STREAM_MSG),明说另外两个旋钮

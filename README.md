@@ -1,5 +1,6 @@
 # trundle
 
+[![CI](https://github.com/PouLJenny/trundle/actions/workflows/ci.yml/badge.svg)](https://github.com/PouLJenny/trundle/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 > **trundle-discuss** —— 把 Claude Code 的单人对话变成回合制群聊。
