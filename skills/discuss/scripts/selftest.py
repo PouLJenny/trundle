@@ -409,17 +409,17 @@ def _yaml_agents(path=AGENTS_YAML):
 
 
 def _readme_agents(path=README):
-    """README「支持的 agent CLI」表首列的名字集合。
+    """README「Supported agent CLIs」表首列的名字集合。
 
     锚定到那一节再抓,不全文扫 —— README 里另有两张表(@ 语法、斜杠命令)
-    的首列也是反引号包起来的,全文扫会把 `@codex <你的话>` 之类一起抓进来。
+    的首列也是反引号包起来的,全文扫会把 `@codex <your words>` 之类一起抓进来。
     """
     names = set()
     inside = False
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             if line.startswith("## "):
-                inside = line.startswith("## 支持的 agent CLI")
+                inside = line.startswith("## Supported agent CLIs")
                 continue
             if not inside:
                 continue

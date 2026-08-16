@@ -3,251 +3,259 @@
 [![CI](https://github.com/PouLJenny/trundle/actions/workflows/ci.yml/badge.svg)](https://github.com/PouLJenny/trundle/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> **trundle** —— 把 Claude Code 的单人对话变成回合制群聊(skill:`/trundle:discuss`)。
-> 让 codex、gemini 等 CLI agent 加入你正在进行的技术讨论,**而你是参与者,不是等报告的人**。
+English | [简体中文](README.zh-CN.md)
 
-**Claude Code 是讨论的当事方;每轮「谁发言、喂什么、怎么收尾」由一个独立的 moderator agent 产出计划;你装的其他 CLI agent 是被拉进来的参与者。**
+> **trundle** — turns your solo Claude Code conversation into a turn-based group chat (skill: `/trundle:discuss`).
+> Bring codex, gemini, and other CLI agents into the technical discussion you're already having — **you stay in as a participant, not someone waiting for a report**.
 
-> **English**: A Claude Code skill that turns your solo conversation into a turn-based group discussion with codex / gemini / other CLI agents. You stay in the discussion as a participant — it does not run an unattended debate and hand you a report. Docs are in Chinese.
+**Claude Code is a party to the discussion; each round's "who speaks, what they're fed, how to wrap up" comes from a plan produced by an independent moderator agent; the other CLI agents you have installed are the participants pulled in.**
 
 ---
 
-## 这是什么
+## What is this
 
-与其描述,不如看一个真实回合:
+Rather than describe it, here's a real round:
 
 ```
-你:那计费周期用自然月还是订阅日?
+You: So should billing cycles align to calendar months or subscription dates?
 
-Claude:(直接回答,没有拉任何人)
+Claude: (answers directly — pulls in no one)
 
-你:那就按比例退款吧,简单
+You: Let's just do pro-rated refunds then, simple
 
-Claude:我倾向同意,但这个判断压在「退款笔数不大」上,我没验证过。
-       让 codex 从实现代价的角度挑一下。
+Claude: I lean toward agreeing, but that judgment rests on "refund volume
+        is small", which I haven't verified. Let me have codex poke at it
+        from the implementation-cost angle.
 
   codex · 8.2s
-  按比例退款的实现代价不在计算,在对账。每笔退款都会产生一条渠道手续费记录……
+  The cost of pro-rated refunds isn't in the arithmetic, it's in
+  reconciliation. Every refund produces a channel-fee record...
 
-    立场:先确认退款笔数量级,再决定要不要走代金券
-    不同意:Claude 说「实现简单」—— 前提是不用跟支付渠道对账
-    如果我错了:如果渠道手续费可以不退,那确实简单
+    Position: confirm the refund volume first, then decide whether to go
+              with vouchers instead
+    Disagree: Claude says "simple to implement" — only if you never have
+              to reconcile with the payment channel
+    If I'm wrong: if channel fees don't need to be refunded, then yes,
+              it really is simple
 
-Claude:codex 不同意我的方案。分歧不在实现,在**要不要做这件事**。
+Claude: codex disagrees with my proposal. The disagreement isn't about
+        implementation — it's about **whether to do this at all**.
 
-       我假设退款是低频的,所以按比例算够用;codex 假设你们接了多个
-       支付渠道、每笔退款都要对账,那手续费会让「按比例」算不平。
+        I assumed refunds are low-frequency, so pro-rating is good enough;
+        codex assumes you have multiple payment channels and every refund
+        gets reconciled, in which case the fees make "pro-rated" not add up.
 
-       **我们的分歧其实是:你们的退款要不要跟渠道对账?**
-       如果要,我这个方案不成立。
+        **Our actual disagreement is: do your refunds need to reconcile
+        against the channel?** If yes, my proposal doesn't hold.
 
-─── 讨论模式 · codex + gemini · 第 3 轮 · 未决 2 ───
+─── Discussion mode · codex + gemini · round 3 · open: 2 ───
 ```
 
-注意最后一段:**Claude 没有给「综合考虑建议 A」,而是把分歧还原成一个只有你能回答的问题。** 这是本项目的核心。
+Note the last block: **Claude does not produce an "all things considered, I recommend A" — it reduces the disagreement to a question only you can answer.** That is the core of this project.
 
-## 核心设计
+## Core design
 
-这四条是这个项目全部的价值所在:
+These four points are the entire value of this project:
 
-- **默认没人说话。** 一场 10 轮讨论里主动拉人只该发生 1–2 次。每轮都喊人来发言会退化成三段互相点头的废话,还白等 15 秒。
-- **不综合,把分歧端出来。** Claude 是当事方不是裁判。分歧未解决时说"综合考虑建议 A"是违规行为 —— 那等于既当选手又当裁判,而你丢掉了本该由你做的那次判断。
-- **让 agent 互相听见。** 喂给每个 agent 的上下文带其他 agent 上一轮的发言**并且署名**。这是"三份独立 review"变成"讨论"的唯一开关 —— 有署名才会产生指向性反驳,没署名就只会各说各的。
-- **一致 ≠ 正确。** 固定站位会制造伪共识:给 gemini 设"盯是不是解错了问题"的站位,它几乎必然说"你们解错了问题"。所有人一致时,先怀疑是提问方式把答案喂了进去。
+- **By default, nobody speaks.** In a 10-round discussion, proactively pulling someone in should happen once or twice. Summoning everyone every round degrades into three paragraphs of mutual nodding — plus a wasted 15-second wait.
+- **Don't synthesize — put the disagreement on the table.** Claude is a party, not a referee. Saying "all things considered, I recommend A" while a disagreement is unresolved is a protocol violation — it means playing both player and referee, and you lose the judgment call that was yours to make.
+- **Let agents hear each other.** The context fed to each agent includes the other agents' previous-round statements, **with attribution**. That is the single switch that turns "three independent reviews" into a discussion — attribution produces targeted rebuttals; without it everyone just talks past each other.
+- **Agreement ≠ correctness.** Fixed stances manufacture false consensus: give gemini the stance "watch for whether we're solving the wrong problem" and it will almost inevitably say "you're solving the wrong problem". When everyone agrees, first suspect that the way the question was asked fed them the answer.
 
-## 工作原理
+## How it works
 
-三种角色,三份权责:
+Three roles, three sets of responsibility:
 
-- **host(Claude Code)**——讨论的**当事方**:亮自己的立场、和你争、被别人反驳。同时是执行者:照计划调用、渲染、记 transcript。
-- **moderator(独立 CLI agent,默认 codex,可在名册配置)**——每轮的**裁量**:谁发言、prompt 怎么组、怎么收尾,输出一份可机械校验的 round plan(协议见 [`skills/discuss/protocol/moderator.md`](skills/discuss/protocol/moderator.md))。实测 13–47s/轮;计划坏了会带反馈自动重试一次;moderator 整个缺席时 host 按同一份协议自行主持(降级模式,会明说)。
-- **参与者(codex / gemini / claude / dsh 子进程)**——**全程只读**,每次调用无状态。
+- **host (Claude Code)** — a **party** to the discussion: states its own position, argues with you, gets rebutted by others. Also the executor: makes the calls per plan, renders output, keeps the transcript.
+- **moderator (independent CLI agent, defaults to codex, configurable in the roster)** — each round's **discretion**: who speaks, how prompts are composed, how to wrap up, emitted as a mechanically-checkable round plan (protocol: [`skills/discuss/protocol/moderator.md`](skills/discuss/protocol/moderator.md), in Chinese). Measured 13–47s/round; a broken plan is retried once with feedback attached; if the moderator is absent entirely, the host presides itself under the same protocol (degraded mode, announced explicitly).
+- **participants (codex / gemini / claude / dsh subprocesses)** — **read-only throughout**, stateless on every call.
 
-## 安装
+## Installation
 
-**方式一:plugin(推荐)**——在 Claude Code 里:
+**Option 1: plugin (recommended)** — inside Claude Code:
 
 ```
 /plugin marketplace add PouLJenny/trundle
 /plugin install trundle@trundle
 ```
 
-装完重启会话,skill 名是 `/trundle:discuss`。
+Restart the session afterwards; the skill name is `/trundle:discuss`.
 
-**方式二:软链(开发者路径)**——skill 名是 `/discuss`:
+**Option 2: symlink (developer path)** — the skill name is `/discuss`:
 
 ```bash
 git clone https://github.com/PouLJenny/trundle.git
 cd trundle
-./skills/discuss/scripts/install.sh    # 软链进 ~/.claude/skills/
-./skills/discuss/scripts/verify.sh     # 自检依赖
+./skills/discuss/scripts/install.sh    # symlinks into ~/.claude/skills/
+./skills/discuss/scripts/verify.sh     # self-checks dependencies
 ```
 
-**两种方式二选一**——同时装会出现两个同内容的 skill。老用户注意:曾软链安装过旧版(目录名 trundle-discuss)的,先 `rm ~/.claude/skills/trundle-discuss` 再装,否则新旧并存;你的名册和讨论记录路径没变,原地可用。
+**Pick one of the two** — installing both gives you two identical skills. Note for existing users: if you previously symlink-installed the old version (directory name trundle-discuss), run `rm ~/.claude/skills/trundle-discuss` first, or old and new will coexist; your roster and discussion transcripts haven't moved and keep working in place.
 
-**Codex CLI 当 host**(≥ 0.144)——codex 原生识别本仓库的 plugin 布局,同一份内容零改动直接装:
+**Codex CLI as host** (≥ 0.144) — codex natively recognizes this repo's plugin layout; the same content installs with zero changes:
 
 ```bash
 codex plugin marketplace add PouLJenny/trundle
 codex plugin add trundle@trundle
 ```
 
-支持状态要说清楚:**打包、安装、skill 发现在 codex 上都实测通过;讨论行为质量未认证**(主 host 测行为、次要 host 只测打包的 superpowers 模式)。名册和讨论记录是 host 无关路径——在 Claude Code 里聊到一半换 codex 接着聊,读写的是同一份。细节与机制映射见 [`references/hosts.md`](skills/discuss/references/hosts.md)。
+The support status, stated plainly: **packaging, installation, and skill discovery are all verified on codex; discussion behavior quality is not certified** (the superpowers model: behavior is tested on the primary host, only packaging on secondary hosts). The roster and discussion transcripts live at host-agnostic paths — start a discussion in Claude Code, switch to codex mid-way, and you're reading and writing the same files. Details and mechanism mapping: [`references/hosts.md`](skills/discuss/references/hosts.md) (in Chinese).
 
-**前置依赖**(只有三条)
+**Prerequisites** (only three)
 
-- **一个 host**:Claude Code(主 host,行为已验证)或 Codex CLI ≥ 0.144(打包已验证,行为未认证)
-- **至少一个**参与者 CLI:`codex` / `gemini` / `claude` / `dsh`
-- **python3 >= 3.8** —— 只用标准库,不需要 pip 装任何东西。Linux 一般自带;macOS 12.3+ 不预装,`xcode-select --install` 即可
+- **One host**: Claude Code (primary host, behavior verified) or Codex CLI ≥ 0.144 (packaging verified, behavior not certified)
+- **At least one** participant CLI: `codex` / `gemini` / `claude` / `dsh`
+- **python3 >= 3.8** — standard library only, nothing to pip-install. Usually preinstalled on Linux; macOS 12.3+ doesn't ship it, `xcode-select --install` does
 
-不需要装 `jq` —— `json` 在 Python 标准库里,再装一个 jq 是白付依赖。
+No `jq` required — `json` is in the Python standard library; installing jq on top is a dependency paid for nothing.
 
-> ### ⚠️ gemini 用户必读
+> ### ⚠️ Required reading for gemini users
 >
-> **gemini 必须在已信任的目录里运行**,否则模型路由会降级到一个不稳定的 preview 分支 —— 实测 8 次请求失败 7 次,墙钟从 14 秒恶化到 108–199 秒。
+> **gemini must run in a trusted directory**, or its model routing degrades to an unstable preview branch — measured 7 failures out of 8 requests, with wall-clock time worsening from 14 seconds to 108–199 seconds.
 >
-> 在该目录交互式跑一次 `gemini` 并选择信任,或在 `~/.gemini/trustedFolders.json` 中加入:
+> Run `gemini` interactively in that directory once and choose to trust it, or add to `~/.gemini/trustedFolders.json`:
 >
 > ```json
 > { "/path/to/your/project": "TRUST_FOLDER" }
 > ```
 >
-> **不要用环境变量绕过信任检查。** 它让报错消失的方式是把延迟涨十倍。本项目的脚本在未信任时会直接跳过 gemini 并告诉你怎么修,而不是偷偷绕过。
+> **Do not bypass the trust check with environment variables.** The way it makes the error disappear is by making latency ten times worse. This project's scripts skip gemini outright when the directory is untrusted and tell you how to fix it, instead of sneaking around it.
 
-**装完要重启 Claude Code 会话** —— skill 不热加载。
+**Restart your Claude Code session after installing** — skills don't hot-reload.
 
-## 使用
+## Usage
 
-### 进入讨论模式
+### Entering discussion mode
 
-三条路,**都以你点头收尾**(Claude 不会自作主张把你拖进讨论模式):
+Three ways in, **all of them end with your nod** (Claude will not drag you into discussion mode on its own):
 
 ```
-/trundle:discuss 订阅计费怎么改      显式命令
-「叫上 codex 一起聊聊这个」          口头声明
+/trundle:discuss how should we change subscription billing    explicit command
+"bring codex in on this"                                      spoken request
 ```
 
-或者你说「这块我不太确定」时,Claude 提议一句「要不要拉 codex 和 gemini 进来讨论?」,你点头才进。
+Or, when you say "I'm not sure about this part", Claude proposes "want me to pull codex and gemini in to discuss?" — you enter only if you nod.
 
-**为什么两端都要显式?** 因为这个模式会改变 Claude 的行为 —— 它会调用外部 agent、会拒绝直接给你结论、会把分歧端回来让你判断。如果隐式进出,你就分不清它是"想不出答案"还是"按协议不给答案"。
+**Why explicit on both ends?** Because this mode changes Claude's behavior — it calls external agents, refuses to hand you a direct conclusion, and puts disagreements back on your table to judge. With implicit entry and exit, you couldn't tell "can't think of an answer" from "withholding an answer per protocol".
 
-### 第一次会让你挑参与者
+### First run: pick your participants
 
-扫描本机可用的 CLI → 你勾选 → 给每人分一个**整场不变的站位** → 写进名册 `~/.config/trundle/roster.yaml`。之后不再问。老版本的名册在 `~/.claude/trundle-discuss/roster.yaml`——还在那里的会被自动回退读取,零迁移;也可用环境变量 `TRUNDLE_ROSTER` 显式指定。名册路径是 host 无关的:将来换别的 host 跑这个 skill,读的还是同一份。
+Scans the CLIs available on your machine → you check the boxes → each participant gets a **stance fixed for the whole discussion** → written to the roster at `~/.config/trundle/roster.yaml`. It won't ask again. Older rosters live at `~/.claude/trundle-discuss/roster.yaml` — anything still there is picked up via automatic fallback, zero migration; you can also point at one explicitly with the `TRUNDLE_ROSTER` environment variable. The roster path is host-agnostic: run this skill under a different host later and it reads the same file.
 
-名册顶部还可以写一行 `moderator: <名>` 选每轮产计划的裁量模型,缺省是 `codex`(实测最稳最快)。指定的没装或没过前置检查时会**响亮**回退,不静默换人。
+The top of the roster may also carry a `moderator: <name>` line to pick the model that produces each round's plan; the default is `codex` (measured most stable and fastest). If the named one isn't installed or fails preflight, the fallback is **loud** — no silent substitution.
 
-建议 2 人,上限 3 人:并行调用的等待时间取最慢那个,而且人越多越容易互相点头。**两个 agent 不能分到同一站位** —— 重复视角既是伪共识的燃料,又白付一份延迟。
+Two participants recommended, three max: parallel-call wait time is set by the slowest one, and the more participants, the more mutual nodding. **Two agents must not share a stance** — a duplicated perspective is fuel for false consensus and a latency bill paid twice.
 
-### 讨论中的控制语法
+### Control syntax during discussion
 
-| 你说 | 效果 |
+| You say | Effect |
 |---|---|
-| `@codex <你的话>` | 只让 codex 回应,**你的原话原样转达** |
-| `@codex @gemini <你的话>` | 同时点名多个 |
-| `@all <你的话>` | 全员回应 |
-| 「让 codex 和 gemini 分头论证 A 和 B」 | 对赌,各给不同任务 |
-| 「把 cline 加进来」 | 中途加人 |
-| 「让 gemini 退出」 | 踢出名册 |
-| 「这轮别带 gemini」 | 仅本轮跳过 |
-| `/trundle:discuss agents` | 重新挑参与者 |
-| 「退出讨论」「开始写吧」 | 结束 |
+| `@codex <your words>` | Only codex responds; **your words are relayed verbatim** |
+| `@codex @gemini <your words>` | Address several at once |
+| `@all <your words>` | Everyone responds |
+| "have codex and gemini argue A and B separately" | A bet: each gets a different assignment |
+| "add cline to the discussion" | Add mid-discussion |
+| "drop gemini" | Remove from the roster |
+| "skip gemini this round" | Skip for this round only |
+| `/trundle:discuss agents` | Re-pick participants |
+| "exit discussion" / "let's start writing" | End |
 
-**`@` 的原话是原样转达的。** 你可以直接怼某个 agent:
-
-```
-@codex 你说的对账问题不成立,我们只有一个渠道
-```
-
-codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账部分存在疑虑」**。这条很重要 —— 你的原话是整场讨论里指向性最强的输入,加工过就变成一团棉花,回来的也是一团棉花。
-
-### 中途加人 / 踢人
-
-**加人**常见于讨论绕进去了,想要一个没被前面对话锚定的新鲜视角。新人拿到的是**共识状态摘要 + 最近两轮**,不是全量历史 —— 中途加人的价值恰恰是"没被锚定",喂太多历史反而毁掉它。简报里会明确告诉它:如果觉得已确立的前提有问题,直接说。
-
-**踢人**分两种:「这轮别带 X」是临时的,「让 X 退出」会写进名册。**被踢的人说过的话留在讨论记录里,不删不划掉** —— 他的论据不会因为他走了就失效。
-
-对赌进行中不能加/踢人,换人会毁掉对照。
-
-### 状态行
-
-每个回合末尾一行:
+**Words after `@` are relayed verbatim.** You can push back on an agent directly:
 
 ```
-─── 讨论模式 · codex + gemini · 第 4 轮 · 未决 2 ───
+@codex your reconciliation concern doesn't hold — we only have one channel
 ```
 
-参与者是谁、第几轮、还有几个没解决的问题。
+codex receives exactly that sentence — **not Claude's paraphrase, "the user has concerns about the reconciliation part"**. This matters: your own words are the most pointed input in the whole discussion; processed, they turn into cotton wool, and cotton wool is what comes back.
 
-### 退出
+### Adding / removing participants mid-discussion
 
-你明说(「开始写吧」),或者 Claude 在三种信号下主动问一次:同一个未决问题连着两轮没有新论据 / 你开始说执行性的话 / 未决问题清空。
+**Adding** usually happens when the discussion has spiraled inward and you want a fresh perspective not anchored by the preceding conversation. The newcomer gets a **consensus-state summary plus the last two rounds**, not the full history — the whole value of joining late is being unanchored, and feeding too much history destroys exactly that. Their briefing says explicitly: if you think an established premise is wrong, say so.
 
-退出时给两三行收尾:
+**Removing** comes in two kinds: "skip X this round" is temporary; "drop X" is written to the roster. **What a removed participant said stays in the transcript, not deleted, not struck through** — their arguments don't expire because they left.
+
+No adding or removing while a bet is in progress — swapping people destroys the comparison.
+
+### Status line
+
+One line at the end of every round:
 
 ```
-─── 已退出讨论模式 ───
-这场讨论定下来的:计费走 Stripe,退款按比例
-仍然没解决的:多渠道对账的手续费谁承担 —— 你说要问一下财务
+─── Discussion mode · codex + gemini · round 4 · open: 2 ───
 ```
 
-**不会生成规格文档。** 除非你明确要,否则讨论记录不会被"整理成文档" —— 一有这个动作,它就变回报告流水线了。
+Who's participating, which round, and how many questions remain open.
 
-退出后 Claude 恢复常态:不再拉 agent,正常写代码。
+### Exiting
 
-## 支持的 agent CLI
+You say so explicitly ("let's start writing"), or Claude asks once — on any of three signals: the same open question has gone two rounds with no new arguments / you start speaking in execution terms / the open-question list is empty.
 
-| CLI | 只读模式 | 实测延迟 | 备注 |
+On exit, a two-or-three-line wrap-up:
+
+```
+─── Exited discussion mode ───
+Settled in this discussion: billing goes through Stripe, refunds pro-rated
+Still unresolved: who absorbs channel fees in multi-channel reconciliation
+— you said you'd ask finance
+```
+
+**No spec document is generated.** Unless you explicitly ask, the transcript is not "written up into a document" — the moment that happens, this turns back into a report pipeline.
+
+After exit Claude returns to normal: no more agent calls, back to writing code.
+
+## Supported agent CLIs
+
+| CLI | Read-only mode | Measured latency | Notes |
 |---|---|---|---|
-| `codex` | `--sandbox read-only` | 7–13s | 非 git 目录需 `--skip-git-repo-check` |
-| `gemini` | `--approval-mode plan` | 6–14s | **必须在信任目录**,否则降级到 108–199s |
-| `claude` | 工具白名单 | 13–30s | 需清 `CLAUDECODE` 避免嵌套 session |
-| `dsh` | `DSH_PERMISSION_MODE=read-only`(**环境变量,不是 flag**) | 4–35s | **没有事件流**:全程静默,跑完一次性给全文;只受绝对上限约束,且上限单独收紧到 300s |
+| `codex` | `--sandbox read-only` | 7–13s | Needs `--skip-git-repo-check` outside a git directory |
+| `gemini` | `--approval-mode plan` | 6–14s | **Must run in a trusted directory**, or it degrades to 108–199s |
+| `claude` | tool allowlist | 13–30s | Needs `CLAUDECODE` cleared to avoid nested sessions |
+| `dsh` | `DSH_PERMISSION_MODE=read-only` (**environment variable, not a flag**) | 4–35s | **No event stream**: silent throughout, full text delivered at once on completion; bounded only by the absolute cap, which is separately tightened to 300s |
 
-**列表里只有实测跑通的。** 每一个都验证过:非交互调用、只读模式真的拦得住写入、输出能干净提取。
+**Only CLIs that have actually been run end-to-end are listed.** Each one is verified: non-interactive invocation works, read-only mode genuinely blocks writes, and output extracts cleanly.
 
-没适配的不会被调用 —— 装了 `opencode`、`cline`、`aider` 之类,扫描时会告诉你"发现但未登记",但不会去猜它怎么调。[欢迎提 PR 加进来](CONTRIBUTING.md)。
+Unadapted CLIs are never called — if you have `opencode`, `cline`, `aider`, or similar installed, the scan reports them as "found but not registered", but will not guess how to invoke them. [PRs to add them are welcome](CONTRIBUTING.md) (in Chinese).
 
-## 新增一个 agent CLI
+## Adding a new agent CLI
 
-适配层很薄,九个字段就能覆盖:命令模板 / 非交互 flag / 只读约束 / 输出提取 / 事件流粒度 / 超时 / 认证 / 诊断命令 / 信任门禁。
+The adapter layer is thin — nine fields cover it: command template / non-interactive flag / read-only constraint / output extraction / event-stream granularity / timeouts / auth / diagnostic command / trust gating.
 
-注意里面**没有「站位」**——站位是讨论里的位置,不是 CLI 的属性,它只存在于你自己的名册里,而且是可选的。
+Note there is **no "stance"** in there — a stance is a position in a discussion, not a property of a CLI; it lives only in your own roster, and it's optional.
 
-**事件流粒度必须实测。** 超时是按"吐字间隔"判的——只要 agent 还在出事件就一直等,连续 90 秒没动静才算卡死。所以一个 CLI 到底是逐 token 吐、逐阶段吐,还是憋到最后一次性吐,直接决定超时怎么判。猜错会稳定误杀它。
+**Event-stream granularity must be measured, not guessed.** Timeouts are judged by inter-output gaps — as long as the agent keeps emitting events we keep waiting, and only 90 consecutive silent seconds counts as stuck. So whether a CLI emits token-by-token, stage-by-stage, or holds everything until the end directly determines how timeouts are judged. Guess wrong and you'll reliably kill it.
 
-`dsh` 就是第三档:它从头到尾一个字都不吐,8.36s 时首字节和末字节同时到达。这一档**不能靠调大超时救**,必须整体跳过空闲判定——否则它一旦跑超过首字节宽限就会被判成"压根没开始",然后请你去拧一个对它不通电的开关。
+`dsh` is the third kind: it emits not a single byte from start to finish — at 8.36s, first byte and last byte arrive together. This kind **cannot be saved by raising timeouts**; the idle check must be skipped entirely — otherwise, the moment it outlives the first-byte grace period it gets classified as "never started", and you get sent off to turn a knob that isn't wired to it.
 
-完整步骤见 [`references/adapting-new-cli.md`](skills/discuss/references/adapting-new-cli.md)。
+Full steps: [`references/adapting-new-cli.md`](skills/discuss/references/adapting-new-cli.md) (in Chinese).
 
-**只读约束必须实测确认,不能猜。** 猜错非交互 flag 只是挂掉;**猜错只读约束会让它拿到写你代码库的权限**。所以扫描到未登记的 CLI 时,本项目只会列出来告诉你,绝不擅自调用。
+**The read-only constraint must be verified by running it — never guessed.** Guessing the non-interactive flag wrong just crashes; **guessing the read-only constraint wrong hands the agent write access to your codebase**. That's why, when the scan finds an unregistered CLI, this project only lists it and tells you — it never invokes on its own.
 
-只读也不一定是 flag:`dsh` 就只有环境变量,而且它的默认值是**可写的**。这种情况多一条要求——脚本必须**覆盖**你的环境而不是继承它。
+Read-only isn't always a flag either: `dsh` only has an environment variable, and its default is **writable**. That case carries one extra requirement — the script must **override** your environment, not inherit it.
 
-## 隐私与成本
+## Privacy & cost
 
-- 讨论记录会落盘到 `<你的项目>/.trundle/`(老项目若已有 `.claude/trundle-discuss/` 则继续写那里,记录不劈成两份),含完整讨论内容。注意别提交进你自己的仓库
-- **你的讨论内容会被发送给你选中的每个 CLI 对应的服务商**
-- 每次拉人都是真实的 API 调用,产生真实费用。这也是"默认不拉人"的现实理由之一
+- Transcripts are written to `<your project>/.trundle/` (projects that already have `.claude/trundle-discuss/` keep writing there — records aren't split in two), containing the full discussion content. Take care not to commit it into your own repository
+- **Your discussion content is sent to the service provider behind every CLI you selected**
+- Every pull-in is a real API call incurring real cost. That's one of the practical reasons for "nobody speaks by default"
 
-## 故障排查
+## Troubleshooting
 
-| 症状 | 原因 | 解法 |
+| Symptom | Cause | Fix |
 |---|---|---|
-| 某个 agent 一直卡在「启动中」,直到超时缺席 | 它**压根没开始干活**:额度耗尽 / 认证失效 / 网络不通。这些错误在非交互模式下可能一个字都不吐 | 照失败说明里给的那条命令,**在终端手动跑一次**看真实报错。要放宽等待请调 `DISCUSSION_FIRST_BYTE_GRACE`(不是 `DISCUSSION_IDLE`,那个管的是开始输出之后的静默) |
-| gemini 跑几轮之后就一直缺席 | 免费层额度很小(实测 `limit: 5` 请求/窗口),耗尽后它会静默退避重试而不报错 | 等额度窗口滚过去,或换成付费额度。这轮先让别人说 |
-| gemini 特别慢(100s+),偶尔整个失败 | 目录未信任,模型路由降级到不稳定分支 | 把目录加进 `trustedFolders.json`。**别用环境变量绕过** |
-| dsh 全程没有任何进度,看起来像卡住了 | 它**没有事件流**:整轮 stdout 零输出,跑完才一次性给出全文 | **这是正常的**。状态行会显示「已跑 Ns(上限 300s)」而不是倒计时。要放宽等待只能调 `DISCUSSION_MAX_WALL`——`DISCUSSION_IDLE` 和 `DISCUSSION_FIRST_BYTE_GRACE` 对它完全无效 |
-| codex 报 `Failed to read prompt from stdin` / os error 11 | 并行调用时 stdin 是不可读管道,codex 以为有 piped 输入 | 调用加 `</dev/null`(内置脚本已处理) |
-| 装了但 skill 不触发 | skill 不热加载 | 重启 Claude Code 会话 |
-| 提示「moderator 缺席 · 本轮由我自行主持」 | 选中的 moderator CLI 没装 / 没过前置检查 / 超预算 | 跑 `verify.sh` 看哪个 CLI 可用;要换模型在名册顶部写 `moderator: <名>`。降级不中止讨论,只是裁量回到 host 脑内 |
-| 状态行提到 round plan 重试(retry=1) | moderator 偶发输出损坏 JSON(实测 14 次里 1 次) | 自动的,不用管;如果**每轮**都重试,请开 issue 附 moderate.py 输出 |
-| 每轮都有一堆 agent 抢着发言 | 协议没生效 | 默认应该只有 Claude 说话 —— 请开 issue |
-| Claude 给了"综合考虑建议 A" | 协议没生效 | 分歧未解决时这是违规行为 —— 请开 issue |
+| An agent sits at "starting" until it times out and is marked absent | It **never started working**: quota exhausted / auth expired / network down. In non-interactive mode these errors may emit nothing at all | Run the exact command from the failure notice **manually in a terminal** to see the real error. To wait longer, raise `DISCUSSION_FIRST_BYTE_GRACE` (not `DISCUSSION_IDLE`, which governs silence *after* output has started) |
+| gemini goes permanently absent after a few rounds | The free tier is tiny (measured `limit: 5` requests/window); once exhausted it silently backs off and retries without reporting an error | Wait for the quota window to roll over, or switch to paid quota. Let the others speak this round |
+| gemini is very slow (100s+), occasionally fails outright | Untrusted directory; model routing degraded to an unstable branch | Add the directory to `trustedFolders.json`. **Don't bypass with environment variables** |
+| dsh shows no progress at all, looks stuck | It has **no event stream**: zero stdout for the whole round, full text delivered at once on completion | **This is normal.** The status line shows "running Ns (cap 300s)" instead of a countdown. The only knob that extends the wait is `DISCUSSION_MAX_WALL` — `DISCUSSION_IDLE` and `DISCUSSION_FIRST_BYTE_GRACE` have no effect on it |
+| codex reports `Failed to read prompt from stdin` / os error 11 | Under parallel invocation stdin is an unreadable pipe; codex assumes piped input | Append `</dev/null` to the call (the bundled scripts already do) |
+| Installed but the skill doesn't trigger | Skills don't hot-reload | Restart the Claude Code session |
+| "moderator absent · I'll preside this round myself" | The chosen moderator CLI isn't installed / failed preflight / over budget | Run `verify.sh` to see which CLIs are available; to switch models, put `moderator: <name>` at the top of the roster. Degradation doesn't stop the discussion — discretion just moves back into the host's head |
+| Status line mentions a round-plan retry (retry=1) | The moderator occasionally emits corrupted JSON (measured 1 in 14) | Automatic, ignore it; if it retries **every** round, open an issue with the moderate.py output |
+| A crowd of agents fights to speak every round | The protocol isn't in effect | By default only Claude should speak — please open an issue |
+| Claude produced an "all things considered, I recommend A" | The protocol isn't in effect | With a disagreement unresolved this is a violation — please open an issue |
 
-## 贡献
+## Contributing
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。最有价值的贡献是**新增 agent CLI 适配条目**。
+See [CONTRIBUTING.md](CONTRIBUTING.md) (in Chinese). The most valuable contribution is **a new agent CLI adapter entry**.
 
 ## Acknowledgements
 
