@@ -9,7 +9,7 @@
 
 第二种是不可接受的。所以未登记的 CLI 必须走一次人工确认才能入库。
 
-## 八个字段
+## 九个字段
 
 ```yaml
   <cli-name>:
@@ -21,12 +21,17 @@
     progress: token | item | none     # ★ 事件流粒度,必须实测
     idle: 90                          # ★ 由 progress 决定,见下
     auth_env: []                      # 需要的认证环境变量
+    probe: <cli> -p "说一句话"         # ★ 给人在终端手动跑的最小调用,见下
     trust:
       check: none                     # none | git_repo | <自定义检查>
     latency_observed: "8-12s"         # 实测耗时
     stance: |
       <整场不变的站位,要和已有的都不重复>
 ```
+
+**`probe` 不是可有可无的礼节字段。** agent 卡在启动阶段被判超时时,失败说明会把它原样印给用户。存在的理由是实测教训:额度耗尽、认证失效这类错误,在非交互模式下**可能一个字都不吐**——实测过一次 gemini 配额耗尽,无 TTY 时 100s 内 stdout 只有 `init` 和 prompt 回显、stderr 只有一条颜色警告,限流关键词零命中;而同一时刻同样的调用在终端里会打出 `You exceeded your current quota`。用户唯一的出路就是去终端手动跑一次,所以不要让他自己猜命令怎么写。
+
+`scripts/selftest.py` 会检查每个 spec 都有这个字段,漏填直接红。
 
 **优先选 JSONL 事件流输出,不要纯文本。** 这条和早期版本相反,原因是实测:
 

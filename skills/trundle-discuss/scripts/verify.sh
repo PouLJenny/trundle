@@ -105,6 +105,21 @@ else
 fi
 
 echo
+echo "── 自检(纯函数,不调用任何 agent CLI)──"
+
+p="$SCRIPT_DIR/selftest.py"
+if [ ! -f "$p" ]; then
+  note "selftest.py 不存在,跳过"
+elif ! command -v python3 >/dev/null 2>&1; then
+  note "自检跳过(没有 python3)"
+elif out="$(python3 "$p" 2>&1)"; then
+  ok "$(printf '%s' "$out" | tail -1 | sed 's/^✓ //')"
+else
+  bad "自检失败"
+  printf '%s\n' "$out" | sed 's/^/      /'
+fi
+
+echo
 if [ "$fail" -gt 0 ]; then
   echo "✗ $fail 项必需依赖缺失,补齐后再用。"
   exit 1
