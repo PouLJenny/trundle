@@ -204,10 +204,11 @@ agents:
     # idle/GRACE 判定,超时文案也是单独一套(NO_STREAM_MSG),明说另外两个旋钮
     # 不通电。详见 references/adapting-new-cli.md 的「没有事件流的 CLI 怎么办」。
     idle: null
-    # ★ 墙钟比全局 540 收紧 ★ 无流意味着「卡死」和「正常工作」长得一模一样,
-    # 中途没有任何信号能区分,墙钟是它唯一的护栏,所以要更保守。
-    # 实测最重的讨论级 prompt 只用 34.6s,300 有约 9 倍余量。
-    max_wall: 300
+    # ★ 墙钟是它唯一的护栏 ★ 无流意味着「卡死」和「正常工作」长得一模一样,
+    # 中途没有任何信号能区分。曾收紧到 300,但实际使用中 dsh 的重 prompt
+    # 会超过它,放宽到全局同款 540 —— 这已是上限:不能给 600,Bash 工具
+    # 自己就在 600s 开枪,必须留余量让 invoke.py 先收尾,否则整轮输出全丢。
+    max_wall: 540
     auth_env: []                      # 复用 dsh 自己的登录态
     probe: DSH_PERMISSION_MODE=read-only dsh --profile headless "说一句话"
     trust:

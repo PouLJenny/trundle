@@ -269,9 +269,12 @@ def t_idle_override_does_not_resurrect_idle():
         invoke._IDLE_OVERRIDE = old
 
 
-def t_no_stream_has_shorter_maxwall():
-    # 无流 = 卡死无征兆,墙钟是唯一护栏,所以要比有流的更保守
-    assert invoke.maxwall_for(mkrun("dsh")) == 300
+def t_no_stream_maxwall_capped_at_540():
+    # dsh 无流,墙钟是唯一护栏。曾收紧到 300,实际使用中重 prompt 会超过它,
+    # 放宽到全局同款 540。540 是上限:Bash 工具自己在 600s 开枪,invoke.py
+    # 必须留余量先收尾 —— 谁把它调到 >540 就是把整轮输出交给 Bash 工具枪毙
+    assert invoke.maxwall_for(mkrun("dsh")) == 540
+    assert invoke.maxwall_for(mkrun("dsh")) <= invoke.MAXWALL
     assert invoke.maxwall_for(mkrun("codex")) == invoke.MAXWALL
 
 
@@ -287,7 +290,7 @@ def t_maxwall_override_applies_to_all():
 
 
 def t_no_stream_timeout_points_at_maxwall():
-    r = mkrun("dsh", killed="maxwall", wall=300.0,
+    r = mkrun("dsh", killed="maxwall", wall=540.0,
               progress_at_kill="运行中(无进度事件)")
     invoke.classify(r)
     assert r.status == "timeout", r.status
@@ -326,7 +329,7 @@ def t_no_stream_status_line_has_no_countdown():
     line = invoke.status_body([r], silence=True)
     assert "静默" not in line, line
     assert "已跑" in line, line
-    assert "300" in line, "上限要可见,否则墙钟那一枪显得突然:%s" % line
+    assert "540" in line, "上限要可见,否则墙钟那一枪显得突然:%s" % line
 
 
 def t_readonly_env_overrides_user_env():
@@ -725,7 +728,7 @@ def main():
     print("── 无事件流的 agent ──")
     check("无流 agent 没有空闲上限", t_no_stream_has_no_idle)
     check("DISCUSSION_IDLE 也不把它拽回空闲判定", t_idle_override_does_not_resurrect_idle)
-    check("无流 agent 的墙钟单独收紧", t_no_stream_has_shorter_maxwall)
+    check("无流 agent 的墙钟不超过 540 上限", t_no_stream_maxwall_capped_at_540)
     check("显式墙钟覆盖对所有 agent 生效", t_maxwall_override_applies_to_all)
     check("超时 → 指向 DISCUSSION_MAX_WALL", t_no_stream_timeout_points_at_maxwall)
     check("即便被判 idle 也不指错旋钮", t_no_stream_idle_kill_still_points_at_maxwall)

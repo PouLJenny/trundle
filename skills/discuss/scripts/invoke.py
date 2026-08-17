@@ -444,9 +444,11 @@ AGENTS = {
         # 然后 io.stdout.write(outcome.text + "\n") 一把写出。
         "stream": "none",
         "idle": None,               # 空闲超时对它无意义,见 idle_for
-        # 无流 = 卡死无征兆,墙钟是唯一护栏,所以比全局 540 收紧。
-        # 实测最重的讨论级 prompt 只用 34.6s,300 有约 9 倍余量。
-        "max_wall": 300,
+        # 无流 = 卡死无征兆,墙钟是唯一护栏。曾收紧到 300,但实际使用中
+        # dsh 的重 prompt 会超过它,所以放宽到全局同款 540 —— 这已是上限:
+        # 不能给 600,Bash 工具自己就在 600s 开枪,必须留余量让本脚本先收尾,
+        # 否则整轮分段输出和失败分类全丢(见 MAXWALL 上方的注释)。
+        "max_wall": 540,
         # 带上环境变量前缀是刻意的:这条同时是诊断命令和「只读怎么开」的
         # 唯一一份可复制文档。
         "probe": 'DSH_PERMISSION_MODE=read-only dsh --profile headless "说一句话"',

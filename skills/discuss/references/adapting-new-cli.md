@@ -61,8 +61,8 @@
 |---|---|---|
 | stdout 读取 | `drain_stdout`:逐行 `json.loads` → `parse_<cli>` | `drain_stdout_text`:整块进 `run.text`。**不要写 parse 函数**(spec 里显式填 `None`) |
 | 空闲超时 / 首字节宽限 | `idle_for(run)` / `GRACE` | **整体跳过**。`idle_for()` 返回 `None`,`watch()` 直接 `continue` |
-| 绝对上限 | 全局 `max_wall` | 可按 agent 单独收紧(spec 的 `max_wall`)——它是唯一的护栏,该更保守 |
-| 状态行 | `静默 45s/300s` | `已跑 45s(上限 300s)`——**绝不能显示成倒计时** |
+| 绝对上限 | 全局 `max_wall` | 可按 agent 单独定(spec 的 `max_wall`)——它是唯一的护栏。上限 540:Bash 工具在 600s 开枪,必须留余量先收尾 |
+| 状态行 | `静默 45s/300s` | `已跑 45s(上限 540s)`——**绝不能显示成倒计时** |
 | 超时文案 | `NEVER_STARTED_MSG` / `STALLED_MSG` | `NO_STREAM_MSG`,唯一能拧的是 `DISCUSSION_MAX_WALL` |
 | 逐字回显 / `ECHO_CAP` | 逐 token 回显 | 不适用。正文跑完才到手,回显它既失去「它真的在写」的意义,又要为同一段文字付两份 token。改成结束时一行体量回执 |
 
