@@ -222,8 +222,8 @@ Besides agent CLIs, you can bring in **any OpenAI-compatible endpoint** — Deep
 
 ```yaml
 participants:
-  - codex
-  - name: deepseek
+  - agent: codex
+  - agent: deepseek
     api:
       base_url: https://api.deepseek.com/v1
       model: deepseek-chat

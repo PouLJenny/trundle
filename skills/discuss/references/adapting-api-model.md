@@ -19,7 +19,7 @@
 ## 字段(用户在名册里填)
 
 ```yaml
-- name: <参与者名>          # 必须匹配 [A-Za-z][\w-]*,且不得与已适配 CLI 重名
+- agent: <参与者名>         # 必须匹配 [A-Za-z][\w-]*,且不得与已适配 CLI 重名
   api:
     base_url: <必填>        # http/https 都行;明文、内网、localhost 都照发
     model: <必填>
