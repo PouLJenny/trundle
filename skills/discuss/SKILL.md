@@ -106,8 +106,8 @@ moderator 缺席时(moderate.py 退出码非 0:没装任何可用 CLI、超预�
 
   ```yaml
   participants:
-    - codex
-    - name: deepseek
+    - agent: codex
+    - agent: deepseek
       api:
         base_url: https://api.deepseek.com/v1
         model: deepseek-chat
