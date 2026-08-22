@@ -210,11 +210,43 @@ After exit Claude returns to normal: no more agent calls, back to writing code.
 | `codex` | `--sandbox read-only` | 7–13s | Needs `--skip-git-repo-check` outside a git directory |
 | `gemini` | `--approval-mode plan` | 6–14s | **Must run in a trusted directory**, or it degrades to 108–199s |
 | `claude` | tool allowlist | 13–30s | Needs `CLAUDECODE` cleared to avoid nested sessions |
-| `dsh` | `DSH_PERMISSION_MODE=read-only` (**environment variable, not a flag**) | 4–35s | **No event stream**: silent throughout, full text delivered at once on completion; bounded only by the absolute cap, which is separately tightened to 300s |
+| `dsh` | `DSH_PERMISSION_MODE=read-only` (**environment variable, not a flag**) | 4–35s | **No event stream**: silent throughout, full text delivered at once on completion; bounded only by the absolute cap (540s, same as the global default — it was briefly tightened to 300s, but real discussion prompts outgrew it) |
 
 **Only CLIs that have actually been run end-to-end are listed.** Each one is verified: non-interactive invocation works, read-only mode genuinely blocks writes, and output extracts cleanly.
 
 Unadapted CLIs are never called — if you have `opencode`, `cline`, `aider`, or similar installed, the scan reports them as "found but not registered", but will not guess how to invoke them. [PRs to add them are welcome](CONTRIBUTING.md) (in Chinese).
+
+## Direct API participants
+
+Besides agent CLIs, you can bring in **any OpenAI-compatible endpoint** — DeepSeek, Kimi, GLM, Qwen, a local ollama, a company gateway. Declare it in your own roster; nothing about it lives in the shipped adapter library.
+
+```yaml
+participants:
+  - codex
+  - name: deepseek
+    api:
+      base_url: https://api.deepseek.com/v1
+      model: deepseek-chat
+      api_key_env: DEEPSEEK_API_KEY     # the variable NAME, never the value
+```
+
+Fields: `base_url` and `model` are required; `api_key_env`, `headers` and `max_tokens` are optional. A local endpoint that needs no credential simply omits `api_key_env`.
+
+**They have no tools.** This is the one thing to internalise. A CLI participant can open your files (`codex` in a read-only sandbox, `claude` behind a `Read,Glob,Grep` allowlist, …). An API participant sees **only the characters you put in its prompt** — and it will not tell you when that isn't enough; it will infer from the fragment it was given and answer confidently. So the moderator protocol forbids handing them investigative tasks, and requires inlining the actual source whenever a question refers to code. Their transcript lines carry an `·api` suffix so anyone reading that line later — human or model — knows whether the speaker could have verified what it said.
+
+**Three failure modes are specific to this path**, and the failure notice names which one you hit:
+
+- **"context silently truncated"** — the endpoint accepted an over-long prompt, dropped part of it, and answered anyway with `finish_reason: stop`. Nothing errors out. Measured on ollama: a 37,317-character prompt came back as `prompt_tokens: 4096` with a fluent, wrong answer — and what got dropped was the *beginning*, i.e. the established-premises header. The round is marked absent rather than trusted.
+- **"generation incomplete"** — usually `max_tokens`. Note that a truncated response still sends `data: [DONE]`, so the completeness check also looks at `finish_reason`.
+- **"not streaming"** — the endpoint or gateway ignored the stream parameter and returned one whole JSON body.
+
+**No retries.** A 429, a 503, a reset connection — each one means that participant is absent for the round. One missing voice in a group chat is just one missing voice.
+
+**Credentials never touch disk or logs.** Only the *name* of the environment variable is stored and passed around; the value is read at call time and scrubbed out of every failure notice. If you put a token directly into `headers` instead, you get a warning — the call still goes through, but that token now lives in your roster file, and roster files often end up in dotfiles repos.
+
+`verify.sh` states explicitly that it does **not** cover API participants' credentials — it cannot see your roster. Check with `echo $YOUR_KEY_ENV`.
+
+Adding a new endpoint: [`references/adapting-api-model.md`](skills/discuss/references/adapting-api-model.md) (in Chinese). Same discipline as CLIs — only endpoints actually run end-to-end get listed.
 
 ## Adding a new agent CLI
 
@@ -245,7 +277,7 @@ Read-only isn't always a flag either: `dsh` only has an environment variable, an
 | An agent sits at "starting" until it times out and is marked absent | It **never started working**: quota exhausted / auth expired / network down. In non-interactive mode these errors may emit nothing at all | Run the exact command from the failure notice **manually in a terminal** to see the real error. To wait longer, raise `DISCUSSION_FIRST_BYTE_GRACE` (not `DISCUSSION_IDLE`, which governs silence *after* output has started) |
 | gemini goes permanently absent after a few rounds | The free tier is tiny (measured `limit: 5` requests/window); once exhausted it silently backs off and retries without reporting an error | Wait for the quota window to roll over, or switch to paid quota. Let the others speak this round |
 | gemini is very slow (100s+), occasionally fails outright | Untrusted directory; model routing degraded to an unstable branch | Add the directory to `trustedFolders.json`. **Don't bypass with environment variables** |
-| dsh shows no progress at all, looks stuck | It has **no event stream**: zero stdout for the whole round, full text delivered at once on completion | **This is normal.** The status line shows "running Ns (cap 300s)" instead of a countdown. The only knob that extends the wait is `DISCUSSION_MAX_WALL` — `DISCUSSION_IDLE` and `DISCUSSION_FIRST_BYTE_GRACE` have no effect on it |
+| dsh shows no progress at all, looks stuck | It has **no event stream**: zero stdout for the whole round, full text delivered at once on completion | **This is normal.** The status line shows "running Ns (cap 540s)" instead of a countdown. The only knob that extends the wait is `DISCUSSION_MAX_WALL` — `DISCUSSION_IDLE` and `DISCUSSION_FIRST_BYTE_GRACE` have no effect on it |
 | codex reports `Failed to read prompt from stdin` / os error 11 | Under parallel invocation stdin is an unreadable pipe; codex assumes piped input | Append `</dev/null` to the call (the bundled scripts already do) |
 | Installed but the skill doesn't trigger | Skills don't hot-reload | Restart the Claude Code session |
 | "moderator absent · I'll preside this round myself" | The chosen moderator CLI isn't installed / failed preflight / over budget | Run `verify.sh` to see which CLIs are available; to switch models, put `moderator: <name>` at the top of the roster. Degradation doesn't stop the discussion — discretion just moves back into the host's head |
