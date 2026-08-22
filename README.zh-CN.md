@@ -202,7 +202,7 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 | `codex` | `--sandbox read-only` | 7–13s | 非 git 目录需 `--skip-git-repo-check` |
 | `gemini` | `--approval-mode plan` | 6–14s | **必须在信任目录**,否则降级到 108–199s |
 | `claude` | 工具白名单 | 13–30s | 需清 `CLAUDECODE` 避免嵌套 session |
-| `dsh` | `DSH_PERMISSION_MODE=read-only`(**环境变量,不是 flag**) | 4–35s | **没有事件流**:全程静默,跑完一次性给全文;只受绝对上限约束,且上限单独收紧到 300s |
+| `dsh` | `DSH_PERMISSION_MODE=read-only`(**环境变量,不是 flag**) | 4–35s | **没有事件流**:全程静默,跑完一次性给全文;只受绝对上限约束(540s,与全局同款——曾收紧到 300s,但实际讨论的重 prompt 会超过它) |
 
 **列表里只有实测跑通的。** 每一个都验证过:非交互调用、只读模式真的拦得住写入、输出能干净提取。
 
@@ -237,7 +237,7 @@ codex 收到的就是这句原话,**不会被 Claude 转述成「用户对对账
 | 某个 agent 一直卡在「启动中」,直到超时缺席 | 它**压根没开始干活**:额度耗尽 / 认证失效 / 网络不通。这些错误在非交互模式下可能一个字都不吐 | 照失败说明里给的那条命令,**在终端手动跑一次**看真实报错。要放宽等待请调 `DISCUSSION_FIRST_BYTE_GRACE`(不是 `DISCUSSION_IDLE`,那个管的是开始输出之后的静默) |
 | gemini 跑几轮之后就一直缺席 | 免费层额度很小(实测 `limit: 5` 请求/窗口),耗尽后它会静默退避重试而不报错 | 等额度窗口滚过去,或换成付费额度。这轮先让别人说 |
 | gemini 特别慢(100s+),偶尔整个失败 | 目录未信任,模型路由降级到不稳定分支 | 把目录加进 `trustedFolders.json`。**别用环境变量绕过** |
-| dsh 全程没有任何进度,看起来像卡住了 | 它**没有事件流**:整轮 stdout 零输出,跑完才一次性给出全文 | **这是正常的**。状态行会显示「已跑 Ns(上限 300s)」而不是倒计时。要放宽等待只能调 `DISCUSSION_MAX_WALL`——`DISCUSSION_IDLE` 和 `DISCUSSION_FIRST_BYTE_GRACE` 对它完全无效 |
+| dsh 全程没有任何进度,看起来像卡住了 | 它**没有事件流**:整轮 stdout 零输出,跑完才一次性给出全文 | **这是正常的**。状态行会显示「已跑 Ns(上限 540s)」而不是倒计时。要放宽等待只能调 `DISCUSSION_MAX_WALL`——`DISCUSSION_IDLE` 和 `DISCUSSION_FIRST_BYTE_GRACE` 对它完全无效 |
 | codex 报 `Failed to read prompt from stdin` / os error 11 | 并行调用时 stdin 是不可读管道,codex 以为有 piped 输入 | 调用加 `</dev/null`(内置脚本已处理) |
 | 装了但 skill 不触发 | skill 不热加载 | 重启 Claude Code 会话 |
 | 提示「moderator 缺席 · 本轮由我自行主持」 | 选中的 moderator CLI 没装 / 没过前置检查 / 超预算 | 跑 `verify.sh` 看哪个 CLI 可用;要换模型在名册顶部写 `moderator: <名>`。降级不中止讨论,只是裁量回到 host 脑内 |
