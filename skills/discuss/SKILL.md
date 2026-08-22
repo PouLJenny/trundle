@@ -26,7 +26,7 @@ license: Apache-2.0
 
 1. **用户是参与方,不是审批人。** 不向用户「提交」结论等批准,而是向用户**提问**。
 2. **默认一轮只有我说话。** 拉人是例外——这条裁量由 moderator 执行,但它同时是我在降级模式下的行为底线。
-3. **辅助 agent 全程只读。** codex 走 `--sandbox read-only`,gemini 走 `--approval-mode plan`,claude 走工具白名单 `--allowedTools Read,Glob,Grep`,dsh 走 `DSH_PERMISSION_MODE=read-only`(它没有只读 flag,只读靠环境变量,而且它的默认值是**可写的**——脚本强制覆盖用户环境,不随环境变量放宽)。永不给写权限。moderator 自己也是子进程,同样只读。
+3. **辅助 agent 全程只读。** API 参与者天然满足(它够不到文件系统),其余四个 CLI: codex 走 `--sandbox read-only`,gemini 走 `--approval-mode plan`,claude 走工具白名单 `--allowedTools Read,Glob,Grep`,dsh 走 `DSH_PERMISSION_MODE=read-only`(它没有只读 flag,只读靠环境变量,而且它的默认值是**可写的**——脚本强制覆盖用户环境,不随环境变量放宽)。永不给写权限。moderator 自己也是子进程,同样只读。
 4. **产出物是讨论过程。** 除非用户明确要,结尾不生成规格文档、不写"最终方案"。
 5. **子进程无状态。** 每次调用把需要的上下文完整塞进 prompt——它不记得上一轮。moderator 也一样:它每轮从 transcript 重建判断。
 
@@ -102,6 +102,24 @@ moderator 缺席时(moderate.py 退出码非 0:没装任何可用 CLI、超预�
 - **首次**:跑 `<SCRIPTS>/discover.sh` 扫描 → 让用户勾选 → 问要不要分站位 → 写名册。适配库只收实测跑通的 CLI;**未登记的只列出、绝不调用**(猜错只读约束会给它写权限;moderate.py 对未登记名字有同样的闸)。
 - **moderator 可配置**:名册顶部可写一行 `moderator: <名>`(可选)。缺省是 `codex`——spike 实测它三次全稳定、13-47s/轮;显式指定的 CLI 没装或没通过前置检查时,moderate.py 会**响亮**降级到回退链,不静默换人。首次组阵容时顺带问一句,不强制。
 - **站位是可选的。** 写了 stance 的参与者:整场不变,且两人不能同站位(重复视角既是伪共识燃料,又白付一份延迟)。没写的:不预设视角,判伪共识时把观点重合概率算进去。默认 2 人,同时发言上限 3 人,超过要提示。
+- **API 参与者**:名册条目带 `api:` 块的,是直连 LLM API 的参与者。它**没有工具**——看不到文件系统,只知道我写进 prompt 的字。字段:`base_url`(必填)/`model`(必填)/`api_key_env`(可选,只写**变量名**不写值)/`headers`(可选)/`max_tokens`(可选)。
+
+  ```yaml
+  participants:
+    - codex
+    - name: deepseek
+      api:
+        base_url: https://api.deepseek.com/v1
+        model: deepseek-chat
+        api_key_env: DEEPSEEK_API_KEY
+  ```
+
+  **每轮我要把本轮阵容里的 `api:` 块转写成一个 sidecar JSON**(`{名字: {字段…}}`,只含变量名不含凭证),写进本轮 outdir,然后用 `--api-config <该文件>` 传给 `moderate.py`;它会原样传给 `invoke.sh`。不传就等于本轮没有 API 参与者——**全 API 阵容时忘了传,moderator 会报「没有任何已登记的参与者」并退出**。
+
+  写进 moderator 输入的【名册】块时,API 参与者要带标记:`- deepseek [api · 无工具:看不到文件系统,只能看到你写进 prompt 的字]`。
+  它们的发言追加进 transcript 时,**署名带 `·api` 后缀**。
+  它们**不能当 moderator**(v1 明确不做),`moderator:` 字段只认已适配的 CLI。
+
 - **中途加人**:发**入场简报**(共识状态头 + 最近两轮,**不是**全量 transcript——中途加人的价值就是没被前面锚定),末尾必须带「如果你觉得已确立的前提有问题,直接说」。
 - **中途踢人**:「这轮别带 X」不写盘;「让 X 退出」写盘。**被踢者说过的话留在 transcript 里**,他提出的前提继续有效。
 - **对赌进行中禁止加/踢**——换人毁掉对照。
@@ -125,6 +143,8 @@ transcript **只增不改**,署名原话是指向性反驳的唯一来源。静�
 **dsh 是例外:它没有事件流**,整轮 stdout 零输出,跑完才一次性给出全文。空闲超时对它不生效(脚本整体跳过),只受墙钟约束(540s,与全局相同)——无流意味着卡死没有任何征兆,墙钟是唯一的护栏,而 540 已是上限:Bash 工具自己在 600s 开枪,必须留余量让脚本先收尾。
 
 `timeout` 状态有三种含义,脚本会在正文里说明是哪一种,并附上开枪那一刻它在干什么。**如果那里写着「发言中」,那多半不是它卡死,是被砍在正要说话那一刻**——告诉用户可以调大 `DISCUSSION_IDLE` 重试,不要直接当成它没话说。**如果写着「运行中(无进度事件)」,那是 dsh 这类没有事件流的 agent——它的静默是正常的,能调的只有 `DISCUSSION_MAX_WALL`**,别建议用户去拧另外两个。
+
+**API 参与者的失败与 CLI 不同**:没有 exit code、没有 stderr、没有可给的 probe 命令,失败文案用的是 HTTP 状态码 / `finish_reason` / 已收事件数与字数。三种要认得出来——**「疑似上下文被截断」**表示模型只看到了 prompt 的一部分(被丢的通常是开头的共识状态头),这一轮宁可缺席也不能采信;**「生成未完成」**多半是撞上了 `max_tokens`;**「不是流式」**表示该端点或网关忽略了流式参数。它们**都不重试**,一次网络抖动就等于本轮缺席。
 
 **gemini 必须在已 trust 的目录**——未 trust 时脚本返回 `untrusted` 并给补救指引,**绝不用 `GEMINI_CLI_TRUST_WORKSPACE=true` 绕过**(会把模型路由降级,延迟涨约 10 倍)。
 
@@ -150,3 +170,4 @@ transcript **只增不改**,署名原话是指向性反驳的唯一来源。静�
 | `references/invocation.md` | 要改调用方式、排查 CLI 失败、看实测数据 |
 | `references/prompt-kit.md` | prompt 组装的展开说明(机器执行版以协议为准) |
 | `references/adapting-new-cli.md` | 接纳一个未登记的 CLI |
+| `references/adapting-api-model.md` | 接纳一个新的 API 端点(验证清单与 CLI 完全不同) |

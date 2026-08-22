@@ -232,3 +232,73 @@ agents:
 #
 # 想加进来:按 references/adapting-new-cli.md 跑完验证再提 PR。
 # 只读 flag 必须实测,不能猜。
+
+# ─────────────────────────────────────────────────────────────
+# API 参与者的 wire format 与已知端点
+#
+# ★ 这个块在 agents: 之外,是刻意的 ★
+# selftest 的三条漂移守卫(名单/标量/README 表)只扫 agents: 块,断言的是
+# set(AGENTS) 相等。API 实例是**用户私有配置**,写在名册里、每轮转写成
+# sidecar,永远不进 AGENTS —— 混进去会让 CI 在别人机器上红。
+#
+# ★ 这里不预设任何 model 名 ★ 与上面 pin_model: false 同一条理由:
+# 实测 gemini-2.5-flash 已对新用户下线(2026-08 又复现了一次,报错原话是
+# "no longer available to new users")。硬编码模型名等于埋定时炸弹。
+# model 由用户在自己的名册里填。
+# ─────────────────────────────────────────────────────────────
+api_providers:
+
+  openai_compat:
+    verified: true
+    # v1 只做这一种 wire format。它覆盖 DeepSeek / Kimi / GLM / Qwen /
+    # MiniMax / ollama / vLLM / OpenRouter —— 这些都提供 OpenAI 兼容的
+    # /chat/completions。Anthropic Messages 与 Gemini 原生格式留到 v2。
+    endpoint: "{base_url}/chat/completions"
+    method: POST
+    stream: token            # SSE 有真 token 级 delta
+    # 正文提取:拼接所有 .choices[0].delta.content。
+    # ★ 必须用 .get() ★ 实测 gemini-flash-latest 的末条 delta **没有 content
+    # 这个键**(不是 null,是缺失),用下标会 KeyError。
+    extract: sse:choices[0].delta.content
+    # 完整性判据:收到 data: [DONE] **且** 末条 finish_reason == "stop"。
+    # ★ [DONE] 单独不够 ★ 实测 llama3.1:8b 被 max_tokens 砍断时(finish_reason
+    # 为 length、正文停在半句话)**照样发 [DONE]** —— 它只保证传输完整,
+    # 不保证生成完整。端点不给 finish_reason 时降级为只判 [DONE]。
+    completeness: "[DONE] AND finish_reason==stop"
+    # 静默截断检测。请求一律带 stream_options.include_usage=true。
+    # ★ 这不是可选的礼节 ★ 实测 ollama 在 prompt 超出 num_ctx 时**静默截断**:
+    # HTTP 200、finish_reason=stop、有 [DONE]、正文完整通顺 —— 所有判据都说
+    # 一切正常,而模型只看到了 prompt 的尾部,被丢掉的恰好是开头的共识状态头。
+    # 唯一的带内信号是 usage.prompt_tokens。
+    truncation_signals:
+      - "prompt_tokens < len(prompt)/8"      # 抓「窗口不是 2 的幂但丢弃极多」
+      - "prompt_tokens 恰为 >=2048 的 2 的幂"  # 抓「恰好撞上窗口」
+    # 两条缺一不可:实测只用比值时漏报 3/4(14096/4096、11011/4096、20011/4096
+    # 全被放行),因为自然 token/字符比取决于内容语言。九个样本见 tests/live。
+
+# 已实测跑通的端点(只收实测过的,与 CLI 同纪律)
+api_endpoints_verified:
+  ollama:
+    base_url: "http://localhost:11434/v1"
+    auth: none               # 无 Authorization 头即可,实测 HTTP 200
+    note: "默认 num_ctx 常为 4096,远小于模型本身的上下文长度;超出会静默截断"
+  deepseek:
+    base_url: "https://api.deepseek.com/v1"
+    auth: bearer
+    # 实测(2026-08):发 [DONE]、给 finish_reason、支持 include_usage,
+    # 还额外返回 prompt_cache_hit_tokens。三个模型全是 1M 上下文,
+    # 讨论级 prompt 比它低三个数量级 —— 截断在这里不是问题。
+    note: "deepseek-chat 是别名,实际路由到 deepseek-v4-flash;别硬编码模型名"
+
+  google_openai_compat:
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    auth: bearer
+    note: "模型名会下线,别硬编码;实测发 [DONE],末条 delta 无 content 键"
+
+# 未实测的端点:只列出,不背书。想加请按 references/adapting-api-model.md
+# 跑完验证再提 PR —— 与「未登记的 CLI 只列出、绝不调用」同一条纪律。
+api_endpoints_unverified:
+  - moonshot     # https://api.moonshot.cn/v1
+  - zhipu        # https://open.bigmodel.cn/api/paas/v4
+  - dashscope    # https://dashscope.aliyuncs.com/compatible-mode/v1
+  - openrouter   # https://openrouter.ai/api/v1  (需要额外 headers)

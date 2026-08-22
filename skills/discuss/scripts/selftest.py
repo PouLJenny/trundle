@@ -14,6 +14,7 @@
 """
 
 import io
+import json
 import os
 import re
 import shutil
@@ -696,7 +697,301 @@ def t_skill_version_matches_plugin_json():
         "SKILL.md=%s plugin.json=%s" % (skill_version, plugin_version))
 
 
+# ── API 参与者 ───────────────────────────────────────────────
+#
+# 全部纯函数,零网络零子进程 —— 遵守本文件开头那条教训:自检不能依赖会自己
+# 变化的外部状态(当年在 API 配额窗口上做 A/B,五组实验全部作废)。
+# 需要真端点的验证在 tests/live,不在这里。
+
+def _api_spec(**kw):
+    cfg = {"base_url": "https://api.example.com/v1", "model": "m"}
+    cfg.update(kw)
+    return invoke.build_api_spec("x", cfg, [])
+
+
+def _load(d):
+    """把一个 dict 当 sidecar 加载。-> (ok, err, warns)"""
+    import tempfile
+    f = tempfile.mktemp(suffix=".json")
+    with io.open(f, "w", encoding="utf-8") as fh:
+        json.dump(d, fh)
+    invoke.API_AGENTS.clear()
+    try:
+        return invoke.load_api_config(f)
+    finally:
+        os.unlink(f)
+
+
+def t_shipped_agents_unchanged():
+    # R-004:用户的 API 实例绝不能注进 AGENTS —— 三条漂移守卫断言的是
+    # set(AGENTS) 相等,污染了它,CI 会在别人机器上红。
+    before = set(invoke.AGENTS)
+    ok, err, _ = _load({"deepseek": {"base_url": "https://x/v1", "model": "m"}})
+    assert ok, err
+    assert set(invoke.AGENTS) == before, invoke.AGENTS
+    assert "deepseek" in invoke.API_AGENTS
+    invoke.API_AGENTS.clear()
+
+
+def t_callable_names_is_the_union():
+    # R-039:合法性判定用的是并集。moderate.py 若拿 AGENTS 当这个用,
+    # 全 API 阵容会直接 exit 2 —— 讨论根本进不去。
+    _load({"deepseek": {"base_url": "https://x/v1", "model": "m"}})
+    names = invoke.callable_names()
+    assert set(invoke.AGENTS) <= set(names), names
+    assert "deepseek" in names, names
+    invoke.API_AGENTS.clear()
+
+
+def t_watch_does_not_skip_api_run():
+    # ★ 本组最重要的一条 ★
+    # watch() 里那行原本是 `if r.proc is None: continue`,语义是"启动失败的跳过"。
+    # API run 的 proc **永远**是 None。照原样写会让所有 API 调用完全不受超时
+    # 约束,一直挂到调用方的 600s 把整轮输出丢光 —— 而且跑一次成功调用完全
+    # 抓不到,是静默失效。这里直接锁住那个判定条件。
+    _load({"deepseek": {"base_url": "https://x/v1", "model": "m"}})
+    r = invoke.Run("deepseek", "/dev/null")
+    assert r.kind == "api", r.kind
+    assert r.proc is None
+    skipped = (r.kind != "api" and r.proc is None)
+    assert skipped is False, "API run 被当成启动失败跳过了 —— 它将不受任何超时约束"
+    invoke.API_AGENTS.clear()
+
+
+def t_api_never_untrusted():
+    # R-035:untrusted 的语义是"目录未被信任",只对 CLI 有意义
+    for kw in ({"conn_error": "x"}, {"http_status": 403, "error_body": "no"},
+               {"http_status": 429}, {"killed": "maxwall", "wall": 1.0}):
+        r = mkrun("gemini")
+        r.kind = "api"
+        r.spec = _api_spec()
+        for k, v in kw.items():
+            setattr(r, k, v)
+        invoke.classify(r)
+        assert r.status != "untrusted", (kw, r.status)
+
+
+def t_api_stream_is_token():
+    assert _api_spec()["stream"] == "token"        # R-036
+    assert invoke.AGENTS["dsh"]["stream"] == "none"   # 对照组
+
+
+def t_sse_line_parsing():
+    assert invoke.parse_sse_line("data: [DONE]") == ("done", None)
+    assert invoke.parse_sse_line(": ping") is None
+    assert invoke.parse_sse_line("") is None
+    assert invoke.parse_sse_line("event: foo") is None
+    kind, ev = invoke.parse_sse_line('data: {"a":1}')
+    assert (kind, ev) == ("event", {"a": 1})
+
+
+def t_sse_delta_content_missing_or_null():
+    # R-018:实测 gemini-flash-latest 的末条 delta **没有 content 这个键**
+    # (不是 null,是缺失)。用 d["content"] 会 KeyError,只能 .get()。
+    for d in ({"content": None}, {"role": "assistant"}, {"extra_content": {}}):
+        c, _, _, _ = invoke.sse_delta({"choices": [{"delta": d}]})
+        assert c == "", (d, c)
+    c, _, _, _ = invoke.sse_delta({"choices": [{"delta": {"content": "好"}}]})
+    assert c == "好"
+
+
+def t_sse_delta_reasoning_is_not_body():
+    # R-019:实测 ollama qwen3:0.6b —— 81 条事件,正文 3 字,reasoning 133 字
+    c, think, _, _ = invoke.sse_delta(
+        {"choices": [{"delta": {"content": "", "reasoning": "好"}}]})
+    assert c == "" and think == "好", (c, think)
+
+
+def t_truncation_nine_measured_samples():
+    # 九个样本全部来自真实抓包(plan §2.1 G-22..G-30)。
+    # ★ 前三个 error 样本是旧判据漏报的那三个 ★ 只用比值时它们全被放行,
+    # 因为自然 token/字符比取决于内容语言,而 R-033 恰好强制内联英文代码。
+    for chars, tokens, want in ((1542, 1270, False), (311, 154, False),
+                                (911, 407, False), (2511, 1143, False),
+                                (6011, 2598, False), (8000, 1000, False),
+                                (14096, 4096, True), (11011, 4096, True),
+                                (20011, 4096, True), (37317, 4096, True),
+                                (8000, 999, True)):
+        got = invoke.detect_truncation(chars, tokens) is not None
+        assert got == want, "%d/%d 期望 %s 实得 %s" % (chars, tokens, want, got)
+    # R-024:拿不到 usage 就不判
+    assert invoke.detect_truncation(37317, None) is None
+
+
+def t_credential_shape_closed_enum():
+    yes = (("Authorization", "x"), ("authorization", "x"), ("X-Api-Key", "a"),
+           ("Api-Key", "a"), ("X-Custom", "Bearer sk-abc"))
+    no = (("X-Tenant-Id", "eng"), ("HTTP-Referer", "https://e.com"))
+    for n, v in yes:
+        assert invoke.is_credential_shaped(n, v), (n, v)
+    for n, v in no:
+        assert not invoke.is_credential_shaped(n, v), (n, v)
+
+
+def t_request_never_carries_tools():
+    # R-002:黄卡反面的可观测形式。API 参与者无工具不是"暂时没给",是不给。
+    _, _, body = invoke.build_openai_request(_api_spec(), "hi")
+    d = json.loads(body.decode("utf-8"))
+    for k in ("tools", "functions", "tool_choice"):
+        assert k not in d, k
+    assert d["stream_options"]["include_usage"] is True     # R-017
+
+
+def t_max_tokens_zero_counts_as_set():
+    # R-016:填 0 算填写,不算未填
+    _, _, b0 = invoke.build_openai_request(_api_spec(max_tokens=0), "hi")
+    assert json.loads(b0.decode())["max_tokens"] == 0
+    _, _, bn = invoke.build_openai_request(_api_spec(), "hi")
+    assert "max_tokens" not in json.loads(bn.decode())
+
+
+def t_sidecar_rejects_name_collision():
+    ok, err, _ = _load({"codex": {"base_url": "https://x/v1", "model": "m"}})
+    assert not ok and "codex" in err, err
+
+
+def t_sidecar_rejects_bad_name():
+    # R-042:含空格的名字会让调用方的 ===AGENT 分段正则整段丢弃输出,且不报错
+    for bad in ("my agent", "1deepseek", "", "dee/psk"):
+        ok, err, _ = _load({bad: {"base_url": "https://x/v1", "model": "m"}})
+        assert not ok, bad
+    ok, _, _ = _load({"deepseek-r1_v2": {"base_url": "https://x/v1", "model": "m"}})
+    assert ok
+    invoke.API_AGENTS.clear()
+
+
+def t_sidecar_rejects_missing_field_and_bad_url():
+    assert not _load({"x": {"base_url": "https://a/v1"}})[0]        # 缺 model
+    assert not _load({"x": {"model": "m"}})[0]                      # 缺 base_url
+    for bad in ("", "not-a-url", "file:///etc/passwd"):
+        assert not _load({"x": {"base_url": bad, "model": "m"}})[0], bad
+    # R-010:明文 http、内网主机名、localhost 都照收 —— 这里拒绝的只是"不是 URL"
+    for good in ("http://llm.corp.internal/v1", "http://localhost:11434/v1"):
+        assert _load({"x": {"base_url": good, "model": "m"}})[0], good
+    invoke.API_AGENTS.clear()
+
+
+def t_unknown_field_warns_but_loads():
+    # R-034:静默忽略是不行的 —— 你填了 temperature 期待它生效,而它根本没发出去,
+    # 与 R-023 防的"静默截断"是同一种病。
+    ok, err, warns = _load({"x": {"base_url": "https://a/v1", "model": "m",
+                                  "temperature": 0.7, "top_p": 1}})
+    assert ok, err
+    assert warns and "temperature" in warns[0] and "top_p" in warns[0], warns
+    assert len(warns) == 1, warns          # 一次警告列全部键名,不逐条刷屏
+    invoke.API_AGENTS.clear()
+
+
+def t_precheck_only_reads_env():
+    # R-011 / R-012:未填 api_key_env 直接通过;填了就查环境变量。永不发网络请求。
+    assert invoke.api_precheck(_api_spec()) is None
+    spec = _api_spec(api_key_env="TRUNDLE_TEST_KEY_ABSENT")
+    os.environ.pop("TRUNDLE_TEST_KEY_ABSENT", None)
+    verdict = invoke.api_precheck(spec)
+    assert verdict and verdict[0] == "error", verdict
+    os.environ["TRUNDLE_TEST_KEY_ABSENT"] = "   "
+    assert invoke.api_precheck(spec)[0] == "error"     # 空白串也算没有
+    os.environ["TRUNDLE_TEST_KEY_ABSENT"] = "sk-x"
+    assert invoke.api_precheck(spec) is None
+    os.environ.pop("TRUNDLE_TEST_KEY_ABSENT", None)
+
+
+def t_credential_never_in_failure_note():
+    # R-001 的第四条泄漏面,也是最隐蔽的一条:失败文案会连同正文一起交给模型。
+    os.environ["TRUNDLE_TEST_KEY"] = "sk-super-secret-123456"
+    spec = _api_spec(api_key_env="TRUNDLE_TEST_KEY")
+    r = mkrun("gemini")
+    r.kind, r.spec = "api", spec
+    r.http_status, r.error_body = 401, "bad key sk-super-secret-123456 rejected"
+    invoke.classify(r)
+    assert r.status == "error"
+    assert "sk-super-secret-123456" not in (r.note or ""), r.note
+    os.environ.pop("TRUNDLE_TEST_KEY", None)
+
+
+def t_incomplete_stream_is_absent():
+    # R-021/R-022 + 对 9:[DONE] 只保证传输完整,finish_reason 才保证生成完整。
+    # 实测 llama3.1:8b 被 max_tokens 砍断时**照样发 [DONE]**。
+    def run(saw_done, finish):
+        r = mkrun("gemini")
+        r.kind, r.spec = "api", _api_spec()
+        r.http_status, r.saw_done, r.finish_reason = 200, saw_done, finish
+        r.deltas, r.event_count, r.prompt_chars = ["正文"], 3, 100
+        r.usage = {"prompt_tokens": 90}
+        invoke.classify(r)
+        return r.status
+    assert run(True, "stop") == "ok"
+    assert run(True, "length") == "error"
+    assert run(True, "content_filter") == "error"
+    assert run(False, None) == "error"
+    # 降级:端点压根不给 finish_reason 时,退回只判 [DONE]
+    assert run(True, None) == "ok"
+
+
+def t_timeout_after_thinking_does_not_say_never_started():
+    # ★ 敌手尝试 5 的回归锁 ★
+    # 推理模型思考 100 秒(几百条 reasoning 事件)后卡住 —— 思考不算实质事件,
+    # 于是 got_event 恒为 False。旧文案会说"压根没开始"并指向
+    # FIRST_BYTE_GRACE,而它其实想了很久。dsh 那 400 秒学费的同一种病。
+    r = mkrun("gemini")
+    r.kind, r.spec = "api", _api_spec()
+    r.killed, r.wall, r.got_event = "idle", 280.0, False
+    r.event_count, r.think_chars = 500, 3000
+    invoke.classify(r)
+    assert r.status == "timeout"
+    assert "压根没开始" not in r.note, r.note
+    assert "思考" in r.note, r.note
+    assert "DISCUSSION_FIRST_BYTE_GRACE 对这种情况无效" in r.note, r.note
+
+
+def t_non_streaming_200_is_diagnosed():
+    # R-038:实测 ollama 在 stream=false 时就是这样,某些网关会忽略 stream 参数。
+    # 状态仍是缺席,但文案必须说清真因 —— 否则"流中断,已收 0 条事件"会让人去查网络。
+    r = mkrun("gemini")
+    r.kind, r.spec = "api", _api_spec()
+    r.http_status = 200
+    r.raw_body = ['{"choices":[{"message":{"role":"assistant","content":"hello"}}]}']
+    invoke.classify(r)
+    assert r.status == "error"
+    assert "不是流式" in r.note, r.note
+
+
+def t_http_error_carries_server_wording():
+    # R-027:实测 403 真因是"需要订阅升级"、404 真因是"模型已下线并给出替代名"。
+    # 把这些原文丢掉,用户永远查不出真因。
+    r = mkrun("gemini")
+    r.kind, r.spec = "api", _api_spec()
+    r.http_status = 404
+    r.error_body = "no longer available. Please use models/gemini-3.6-flash"
+    invoke.classify(r)
+    assert r.status == "error" and "gemini-3.6-flash" in r.note, r.note
+
+
 def main():
+    print("── API 参与者 ──")
+    check("适配库登记名单不被 API 实例污染", t_shipped_agents_unchanged)
+    check("本轮可调用名单是两者的并集", t_callable_names_is_the_union)
+    check("★ API run 不被看门狗跳过", t_watch_does_not_skip_api_run)
+    check("API 参与者永不返回 untrusted", t_api_never_untrusted)
+    check("API 参与者的事件流粒度恒为 token", t_api_stream_is_token)
+    check("SSE 行解析(心跳/注释/DONE)", t_sse_line_parsing)
+    check("content 缺失或为 null 按空串", t_sse_delta_content_missing_or_null)
+    check("思考内容不进正文", t_sse_delta_reasoning_is_not_body)
+    check("静默截断:九个实测样本", t_truncation_nine_measured_samples)
+    check("凭证形状的封闭枚举", t_credential_shape_closed_enum)
+    check("请求体永不含工具定义", t_request_never_carries_tools)
+    check("max_tokens 填 0 算填写", t_max_tokens_zero_counts_as_set)
+    check("sidecar 撞名拒绝加载", t_sidecar_rejects_name_collision)
+    check("sidecar 名字合法性", t_sidecar_rejects_bad_name)
+    check("sidecar 必填字段与 URL 校验", t_sidecar_rejects_missing_field_and_bad_url)
+    check("未知字段警告但不拒绝", t_unknown_field_warns_but_loads)
+    check("前置检查只读环境变量", t_precheck_only_reads_env)
+    check("★ 凭证不进失败文案", t_credential_never_in_failure_note)
+    check("流不完整判本轮缺席", t_incomplete_stream_is_absent)
+    check("★ 只思考过的超时不说「压根没开始」", t_timeout_after_thinking_does_not_say_never_started)
+    check("HTTP 200 非流式响应被认出", t_non_streaming_200_is_diagnosed)
+    check("HTTP 错误带上服务端原文", t_http_error_carries_server_wording)
+
     print("── 超时诊断 ──")
     check("从未开始 → 指向 FIRST_BYTE_GRACE", t_never_started_points_at_grace)
     check("从未开始 → 给出手动诊断命令", t_never_started_shows_probe)

@@ -216,6 +216,38 @@ After exit Claude returns to normal: no more agent calls, back to writing code.
 
 Unadapted CLIs are never called — if you have `opencode`, `cline`, `aider`, or similar installed, the scan reports them as "found but not registered", but will not guess how to invoke them. [PRs to add them are welcome](CONTRIBUTING.md) (in Chinese).
 
+## Direct API participants
+
+Besides agent CLIs, you can bring in **any OpenAI-compatible endpoint** — DeepSeek, Kimi, GLM, Qwen, a local ollama, a company gateway. Declare it in your own roster; nothing about it lives in the shipped adapter library.
+
+```yaml
+participants:
+  - codex
+  - name: deepseek
+    api:
+      base_url: https://api.deepseek.com/v1
+      model: deepseek-chat
+      api_key_env: DEEPSEEK_API_KEY     # the variable NAME, never the value
+```
+
+Fields: `base_url` and `model` are required; `api_key_env`, `headers` and `max_tokens` are optional. A local endpoint that needs no credential simply omits `api_key_env`.
+
+**They have no tools.** This is the one thing to internalise. A CLI participant can open your files (`codex` in a read-only sandbox, `claude` behind a `Read,Glob,Grep` allowlist, …). An API participant sees **only the characters you put in its prompt** — and it will not tell you when that isn't enough; it will infer from the fragment it was given and answer confidently. So the moderator protocol forbids handing them investigative tasks, and requires inlining the actual source whenever a question refers to code. Their transcript lines carry an `·api` suffix so anyone reading that line later — human or model — knows whether the speaker could have verified what it said.
+
+**Three failure modes are specific to this path**, and the failure notice names which one you hit:
+
+- **"context silently truncated"** — the endpoint accepted an over-long prompt, dropped part of it, and answered anyway with `finish_reason: stop`. Nothing errors out. Measured on ollama: a 37,317-character prompt came back as `prompt_tokens: 4096` with a fluent, wrong answer — and what got dropped was the *beginning*, i.e. the established-premises header. The round is marked absent rather than trusted.
+- **"generation incomplete"** — usually `max_tokens`. Note that a truncated response still sends `data: [DONE]`, so the completeness check also looks at `finish_reason`.
+- **"not streaming"** — the endpoint or gateway ignored the stream parameter and returned one whole JSON body.
+
+**No retries.** A 429, a 503, a reset connection — each one means that participant is absent for the round. One missing voice in a group chat is just one missing voice.
+
+**Credentials never touch disk or logs.** Only the *name* of the environment variable is stored and passed around; the value is read at call time and scrubbed out of every failure notice. If you put a token directly into `headers` instead, you get a warning — the call still goes through, but that token now lives in your roster file, and roster files often end up in dotfiles repos.
+
+`verify.sh` states explicitly that it does **not** cover API participants' credentials — it cannot see your roster. Check with `echo $YOUR_KEY_ENV`.
+
+Adding a new endpoint: [`references/adapting-api-model.md`](skills/discuss/references/adapting-api-model.md) (in Chinese). Same discipline as CLIs — only endpoints actually run end-to-end get listed.
+
 ## Adding a new agent CLI
 
 The adapter layer is thin — nine fields cover it: command template / non-interactive flag / read-only constraint / output extraction / event-stream granularity / timeouts / auth / diagnostic command / trust gating.

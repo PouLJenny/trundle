@@ -136,6 +136,9 @@ def pick_moderator(explicit):
         else:
             return explicit, warns
 
+    # ★ 候选集只取 AGENTS,不用 callable_names() ★ moderator 走 API 是 v1 明确
+    # 不做的(plan D-009 / R-040)。这条不是顺手写的:修 roster_names_from_input
+    # 时很容易连这里一起改成本轮可调用名单,那就把 D-009 悄悄破掉了。
     chain = [DEFAULT_MODERATOR] + [n for n in invoke.AGENTS
                                    if n != DEFAULT_MODERATOR]
     for name in chain:
@@ -150,8 +153,14 @@ def pick_moderator(explicit):
 def roster_names_from_input(text):
     """从输入的【名册】块抽参与者名。只认 `- 名字` 行,读到下一个【段】为止。
 
-    与 invoke.AGENTS 求交集:未登记的名字进了名册也绝不会被执行——
-    猜错只读约束会给它写权限,这是铁律的最后一道闸。"""
+    与**本轮可调用名单**求交集:未登记的名字进了名册也绝不会被执行——
+    猜错只读约束会给它写权限,这是铁律的最后一道闸。
+
+    ★ 这里必须是 callable_names() 而不是 AGENTS ★ 两者是不同的集合:
+    AGENTS 只含随 skill 发布的 CLI 适配库,API 参与者在 API_AGENTS 里。
+    用 AGENTS 的后果是:全 API 阵容 -> 交集为空 -> 下面直接 emit_fail 退出 2,
+    讨论根本进不去;混编阵容 -> API 参与者被静默丢弃,moderator 永远拉不到它。
+    见 plan R-004 / R-039 与 TC-039-3。"""
     names, in_roster = [], False
     for line in text.splitlines():
         if line.startswith("【名册】"):
@@ -163,8 +172,9 @@ def roster_names_from_input(text):
             m = re.match(r"^\s*-\s*([A-Za-z][\w-]*)", line)
             if m:
                 names.append(m.group(1))
-    registered = [n for n in names if n in invoke.AGENTS]
-    dropped = [n for n in names if n not in invoke.AGENTS]
+    callable_set = set(invoke.callable_names())
+    registered = [n for n in names if n in callable_set]
+    dropped = [n for n in names if n not in callable_set]
     return registered, dropped
 
 
@@ -201,6 +211,16 @@ def run_round(opts):
 
     with open(PROTOCOL, encoding="utf-8") as fh:
         protocol = fh.read()
+
+    # ★ 必须在 roster_names_from_input 之前 ★ 那个函数用本轮可调用名单判合法性,
+    # 而 API 参与者要先从 sidecar 加载进来才在名单里。顺序反了的症状是:
+    # 全 API 阵容被判成「没有任何已登记的参与者」直接退出 2。
+    if opts.api_config:
+        ok, err, warns = invoke.load_api_config(opts.api_config)
+        for w in warns:
+            sys.stderr.write("··· %s\n" % w)
+        if not ok:
+            return emit_fail("sidecar 加载失败:\n%s" % err, 2)
 
     roster_names, dropped = roster_names_from_input(round_input)
     if dropped:
@@ -245,7 +265,8 @@ def run_round(opts):
         hard = plan_check.hard_failures(results)
         if not hard:
             soft = plan_check.soft_failures(results)
-            return emit_plan(plan, moderator, attempt, wall, soft, outdir)
+            return emit_plan(plan, moderator, attempt, wall, soft, outdir,
+                             opts.api_config)
         notes.append("第 %d 次输出未过校验: %s"
                      % (attempt + 1, ", ".join(c["check"] for c in hard)))
         if attempt == 0:
@@ -256,7 +277,7 @@ def run_round(opts):
                      % (moderator, "\n".join(notes)), 1)
 
 
-def emit_plan(plan, moderator, retry, wall, soft, outdir):
+def emit_plan(plan, moderator, retry, wall, soft, outdir, api_config=None):
     out = sys.stdout
     out.write("===PLAN ok moderator=%s retry=%d %.1fs===\n"
               % (moderator, retry, wall))
@@ -270,7 +291,8 @@ def emit_plan(plan, moderator, retry, wall, soft, outdir):
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(c["prompt"])
             args.append("%s:%s" % (c["target"], path))
-        out.write("%s %s\n" % (os.path.join(HERE, "invoke.sh"), " ".join(args)))
+        prefix = ("--api-config %s " % api_config) if api_config else ""
+        out.write("%s %s%s\n" % (os.path.join(HERE, "invoke.sh"), prefix, " ".join(args)))
     else:
         out.write("本轮无外部调用\n")
     if soft:
@@ -292,6 +314,9 @@ def main(argv):
                     help="覆盖名册里的 moderator 字段(调试用)")
     ap.add_argument("--outdir", default=None,
                     help="prompt 与计划落盘目录,默认临时目录")
+    ap.add_argument("--api-config", default=None, dest="api_config",
+                    help="本轮 API 实例配置(sidecar JSON,只含环境变量名不含凭证)。"
+                         "壳从名册的 api 块转写而来;不给则本轮没有 API 参与者")
     return run_round(ap.parse_args(argv))
 
 
